@@ -1,0 +1,117 @@
+spring:
+  profiles:
+    active: dev
+
+  application:
+    name: ambiance-holidays-api
+
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/ambiance_holidays}
+    username: ${DB_USERNAME:ambiance}
+    password: ${DB_PASSWORD:ambiance}
+    driver-class-name: org.postgresql.Driver
+    hikari:
+      maximum-pool-size: 10
+      minimum-idle: 2
+      connection-timeout: 30000
+      idle-timeout: 600000
+      max-lifetime: 1800000
+
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    show-sql: false
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+        format_sql: true
+        default_schema: public
+
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+    baseline-on-migrate: true
+    validate-on-migrate: true
+
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
+      timeout: 5000ms
+
+  mail:
+    host: ${MAIL_HOST:smtp.gmail.com}
+    port: ${MAIL_PORT:587}
+    username: ${MAIL_USERNAME:noreply@ambianceholidays.mu}
+    password: ${MAIL_PASSWORD:}
+    properties:
+      mail:
+        smtp:
+          auth: true
+          starttls:
+            enable: true
+
+server:
+  port: 8080
+  servlet:
+    context-path: /api/v1
+  compression:
+    enabled: true
+    mime-types: application/json,application/xml,text/html,text/xml,text/plain
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+  endpoint:
+    health:
+      show-details: when-authorized
+  health:
+    mail:
+      enabled: false
+
+app:
+  jwt:
+    secret: ${JWT_SECRET:ambiance-holidays-super-secret-jwt-key-change-in-production-min-512-bits}
+    access-token-expiry-ms: 900000      # 15 minutes
+    refresh-token-expiry-days: 30
+
+  cors:
+    allowed-origins: ${CORS_ORIGINS:http://localhost:3000}
+
+  s3:
+    bucket: ${S3_BUCKET:ambiance-media}
+    region: ${S3_REGION:eu-west-1}
+    endpoint: ${S3_ENDPOINT:}          # override for MinIO in dev
+    access-key: ${S3_ACCESS_KEY:}
+    secret-key: ${S3_SECRET_KEY:}
+    cdn-base-url: ${CDN_BASE_URL:http://localhost:9000/ambiance-media}
+
+  stripe:
+    secret-key: ${STRIPE_SECRET_KEY:sk_test_placeholder}
+    webhook-secret: ${STRIPE_WEBHOOK_SECRET:whsec_placeholder}
+    publishable-key: ${STRIPE_PUBLISHABLE_KEY:pk_test_placeholder}
+
+  peach:
+    client-id: ${PEACH_CLIENT_ID:}
+    client-secret: ${PEACH_CLIENT_SECRET:}
+    merchant-id: ${PEACH_MERCHANT_ID:}
+    entity-id: ${PEACH_ENTITY_ID:}
+    auth-base-url: ${PEACH_AUTH_BASE_URL:https://sandbox-dashboard.peachpayments.com}
+    checkout-base-url: ${PEACH_CHECKOUT_BASE_URL:https://sandbox-checkout.peachpayments.com}
+    return-base-url: ${PEACH_RETURN_BASE_URL:http://localhost:3000}
+    default-currency: ${PEACH_DEFAULT_CURRENCY:USD}
+
+  rate-limit:
+    auth-requests-per-minute: 5
+    api-requests-per-minute: 300
+
+  business:
+    vat-rate: 15.0
+    default-commission-rate: 10.0
+    default-markup-rate: 0.0
+    cart-ttl-days: 7
+    same-day-cutoff-time: "18:00"
+    timezone: "Indian/Mauritius"

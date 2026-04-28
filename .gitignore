@@ -1,0 +1,54 @@
+# Maven build output
+target/
+*.jar.original
+dependency-reduced-pom.xml
+
+# Runtime logs (created when running the JAR locally)
+logs/
+*.log
+
+# Spring Boot
+spring-shell.log
+.spring-boot-devtools.properties
+
+# Local environment / secrets
+.env
+.env.*
+!.env.example
+application-local.yml
+application-secrets.yml
+
+# IDE — IntelliJ IDEA
+.idea/
+*.iml
+*.ipr
+*.iws
+out/
+
+# IDE — Eclipse / STS
+.classpath
+.project
+.settings/
+.factorypath
+.springBeans
+.sts4-cache/
+bin/
+
+# IDE — VS Code (allow shared settings, ignore user state)
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+
+# OS clutter
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Test reports
+surefire-reports/
+failsafe-reports/
+
+# Maven wrapper (keep mvnw scripts if present, ignore the cached jar)
+.mvn/wrapper/maven-wrapper.jar
