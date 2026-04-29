@@ -126,10 +126,17 @@
             <version>${stripe.version}</version>
         </dependency>
 
-        <!-- AWS SDK v2 (S3) -->
+        <!-- AWS SDK v2 — `s3` already bundles the presigner classes; `regions` is also
+             pulled transitively but we use Region.of(...) directly so we declare it
+             explicitly to keep the import survivable across SDK version bumps. -->
         <dependency>
             <groupId>software.amazon.awssdk</groupId>
             <artifactId>s3</artifactId>
+            <version>${awssdk.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>software.amazon.awssdk</groupId>
+            <artifactId>regions</artifactId>
             <version>${awssdk.version}</version>
         </dependency>
 
@@ -161,11 +168,17 @@
             <optional>true</optional>
         </dependency>
 
-        <!-- OpenAPI / Swagger UI -->
+        <!-- OpenAPI / Swagger UI — springdoc transitively pulls swagger-models-jakarta,
+             but we use io.swagger.v3.oas.* directly in OpenApiConfig so declare it. -->
         <dependency>
             <groupId>org.springdoc</groupId>
             <artifactId>springdoc-openapi-starter-webmvc-ui</artifactId>
             <version>${springdoc.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>io.swagger.core.v3</groupId>
+            <artifactId>swagger-models-jakarta</artifactId>
+            <version>2.2.22</version>
         </dependency>
 
         <!-- AOP (for audit aspect) -->
