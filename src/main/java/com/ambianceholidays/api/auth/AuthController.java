@@ -58,7 +58,13 @@ public class AuthController {
             @Valid @RequestBody ForgotPasswordRequest request) {
         authService.forgotPassword(request);
         return ResponseEntity.ok(ApiResponse.ok(
-                Map.of("message", "If this email exists, a reset link has been sent")));
+                Map.of("message", "If this email exists, a 6-digit code has been sent to it.")));
+    }
+
+    @PostMapping("/verify-otp")
+    public ResponseEntity<ApiResponse<VerifyOtpResponse>> verifyOtp(
+            @Valid @RequestBody VerifyOtpRequest request) {
+        return ResponseEntity.ok(ApiResponse.ok(authService.verifyOtp(request)));
     }
 
     @PostMapping("/reset-password")

@@ -72,4 +72,21 @@ public class JwtTokenProvider {
     public String getUserIdFromToken(String token) {
         return validateAndParseToken(token).getSubject();
     }
+
+    /**
+     * Issue a short-lived single-purpose JWT (e.g. password-reset verification
+     * token after OTP success). The token carries no role/agent claims — only
+     * the subject (user id) and a purpose tag the caller checks before acting.
+     */
+    public String generatePurposeToken(UUID userId, String purpose, long expiryMs) {
+        Date now = new Date();
+        return Jwts.builder()
+                .id(UUID.randomUUID().toString())
+                .subject(userId.toString())
+                .claim("purpose", purpose)
+                .issuedAt(now)
+                .expiration(new Date(now.getTime() + expiryMs))
+                .signWith(signingKey)
+                .compact();
+    }
 }

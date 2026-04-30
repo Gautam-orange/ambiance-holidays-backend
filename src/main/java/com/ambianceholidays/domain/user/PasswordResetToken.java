@@ -32,6 +32,10 @@ public class PasswordResetToken {
     @Column(name = "used_at")
     private Instant usedAt;
 
+    @Column(name = "attempts", nullable = false)
+    @Builder.Default
+    private int attempts = 0;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     @Builder.Default
     private Instant createdAt = Instant.now();

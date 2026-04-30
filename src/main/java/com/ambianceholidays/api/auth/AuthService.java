@@ -47,11 +47,24 @@ public class AuthService {
     @Value("${app.jwt.refresh-token-expiry-days}")
     private int refreshTokenExpiryDays;
 
-    @Value("${spring.mail.username}")
+    /**
+     * From: address for outbound mail. Separate from spring.mail.username so
+     * SMTP relays whose login username is a literal (e.g. "resend") still produce
+     * a valid From: header. Falls back to spring.mail.username when not set.
+     */
+    @Value("${app.mail.from:${spring.mail.username}}")
     private String fromEmail;
 
     @Value("${app.base-url:http://localhost:5173}")
     private String baseUrl;
+
+    /**
+     * Development convenience: when true, password-reset OTPs are also written
+     * to the application log so they can be retrieved without a working SMTP
+     * server. MUST be false in production — gated by env var.
+     */
+    @Value("${app.dev.log-otp:false}")
+    private boolean logOtpToConsole;
 
     private final SecureRandom secureRandom = new SecureRandom();
 
@@ -194,46 +207,125 @@ public class AuthService {
         });
     }
 
+    // ── Password reset (OTP-based) ──────────────────────────────────────────
+    private static final int OTP_LENGTH = 6;
+    private static final int OTP_EXPIRY_MINUTES = 10;
+    private static final int OTP_MAX_ATTEMPTS = 5;
+    private static final long VERIFICATION_TOKEN_EXPIRY_MS = 5 * 60 * 1000L;
+    private static final String PURPOSE_PASSWORD_RESET = "password_reset";
+
+    /**
+     * Step 1 of OTP password reset.
+     * Generate a fresh 6-digit OTP, invalidate any older OTPs for this user,
+     * persist the SHA-256 hash with a 10-minute expiry, and email the OTP.
+     * Always returns silently — never reveals whether the email exists,
+     * to prevent account enumeration.
+     */
     @Transactional
     public void forgotPassword(ForgotPasswordRequest request) {
-        // Always return success to prevent email enumeration
-        userRepository.findByEmailAndDeletedAtIsNull(request.getEmail()).ifPresent(user -> {
-            String rawToken = generateSecureToken();
-            String tokenHash = hashToken(rawToken);
+        userRepository.findByEmailAndDeletedAtIsNull(request.getEmail().toLowerCase().trim())
+                .ifPresent(user -> {
+                    passwordResetTokenRepository.invalidateAllForUser(user.getId());
 
-            PasswordResetToken resetToken = PasswordResetToken.builder()
-                    .user(user)
-                    .tokenHash(tokenHash)
-                    .expiresAt(Instant.now().plus(1, ChronoUnit.HOURS))
-                    .build();
-            passwordResetTokenRepository.save(resetToken);
+                    String otp = generateOtp();
+                    PasswordResetToken resetToken = PasswordResetToken.builder()
+                            .user(user)
+                            .tokenHash(hashToken(otp))
+                            .expiresAt(Instant.now().plus(OTP_EXPIRY_MINUTES, ChronoUnit.MINUTES))
+                            .attempts(0)
+                            .build();
+                    passwordResetTokenRepository.save(resetToken);
 
-            sendPasswordResetEmail(user, rawToken);
-        });
+                    if (logOtpToConsole) {
+                        log.warn("[DEV-ONLY] Password reset OTP for {}: {} (do NOT enable in production)",
+                                user.getEmail(), otp);
+                    }
+                    sendPasswordResetOtpEmail(user, otp);
+                });
     }
 
+    /**
+     * Step 2 of OTP password reset.
+     * Verify the OTP and return a short-lived JWT the frontend will pass
+     * back to /auth/reset-password as the verificationToken.
+     */
     @Transactional
-    public void resetPassword(ResetPasswordRequest request) {
-        String tokenHash = hashToken(request.getToken());
-        PasswordResetToken resetToken = passwordResetTokenRepository.findByTokenHash(tokenHash)
-                .orElseThrow(() -> BusinessException.badRequest("INVALID_TOKEN",
-                        "Invalid or expired reset token"));
+    public VerifyOtpResponse verifyOtp(VerifyOtpRequest request) {
+        User user = userRepository.findByEmailAndDeletedAtIsNull(request.getEmail().toLowerCase().trim())
+                .orElseThrow(() -> BusinessException.badRequest("INVALID_OTP",
+                        "Invalid email or OTP"));
 
-        if (!resetToken.isValid()) {
-            throw BusinessException.badRequest("INVALID_TOKEN", "Reset token has expired or already been used");
+        PasswordResetToken token = passwordResetTokenRepository.findActiveForUser(user.getId())
+                .orElseThrow(() -> BusinessException.badRequest("OTP_EXPIRED",
+                        "OTP has expired or was not requested. Please request a new one."));
+
+        if (token.getAttempts() >= OTP_MAX_ATTEMPTS) {
+            // Mark used so subsequent guesses can't probe; force a fresh request.
+            token.setUsedAt(Instant.now());
+            passwordResetTokenRepository.save(token);
+            throw BusinessException.badRequest("TOO_MANY_ATTEMPTS",
+                    "Too many incorrect attempts. Please request a new OTP.");
         }
 
-        User user = resetToken.getUser();
+        if (!token.getTokenHash().equals(hashToken(request.getOtp()))) {
+            token.setAttempts(token.getAttempts() + 1);
+            passwordResetTokenRepository.save(token);
+            int remaining = OTP_MAX_ATTEMPTS - token.getAttempts();
+            throw BusinessException.badRequest("INVALID_OTP",
+                    remaining > 0
+                            ? "Incorrect OTP. " + remaining + " attempt(s) remaining."
+                            : "Incorrect OTP. Please request a new one.");
+        }
+
+        // OTP is correct. Issue a single-purpose verification JWT (5 min) but
+        // DO NOT mark the token as used yet — that happens in step 3 so a
+        // user can't end up with a verified-but-unusable session if their
+        // password set fails validation.
+        String verificationToken = jwtTokenProvider.generatePurposeToken(
+                user.getId(), PURPOSE_PASSWORD_RESET, VERIFICATION_TOKEN_EXPIRY_MS);
+
+        log.info("OTP verified for user: {}", user.getEmail());
+        return new VerifyOtpResponse(verificationToken, VERIFICATION_TOKEN_EXPIRY_MS / 1000);
+    }
+
+    /**
+     * Step 3 of OTP password reset.
+     * Validate the verification JWT, set the new password, mark the OTP used
+     * and revoke all refresh tokens (forcing other devices to re-login).
+     */
+    @Transactional
+    public void resetPassword(ResetPasswordRequest request) {
+        if (!jwtTokenProvider.isTokenValid(request.getVerificationToken())) {
+            throw BusinessException.badRequest("INVALID_TOKEN",
+                    "Verification token is invalid or has expired. Please restart the reset process.");
+        }
+        var claims = jwtTokenProvider.validateAndParseToken(request.getVerificationToken());
+        if (!PURPOSE_PASSWORD_RESET.equals(claims.get("purpose", String.class))) {
+            throw BusinessException.badRequest("INVALID_TOKEN", "Verification token is not valid for password reset.");
+        }
+        UUID userId = UUID.fromString(claims.getSubject());
+
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> BusinessException.badRequest("INVALID_TOKEN", "Account not found."));
+
+        // Defence in depth — the email submitted at step 3 must match the JWT subject.
+        if (!user.getEmail().equalsIgnoreCase(request.getEmail().trim())) {
+            throw BusinessException.badRequest("INVALID_TOKEN", "Verification token does not match this account.");
+        }
+
+        PasswordResetToken token = passwordResetTokenRepository.findActiveForUser(userId)
+                .orElseThrow(() -> BusinessException.badRequest("OTP_EXPIRED",
+                        "Reset session has expired. Please request a new OTP."));
+
         user.setPasswordHash(passwordEncoder.encode(request.getNewPassword()));
         userRepository.save(user);
 
-        resetToken.setUsedAt(Instant.now());
-        passwordResetTokenRepository.save(resetToken);
+        token.setUsedAt(Instant.now());
+        passwordResetTokenRepository.save(token);
 
-        // Revoke all refresh tokens for security
         refreshTokenRepository.revokeAllForUser(user.getId());
 
-        log.info("Password reset for user: {}", user.getEmail());
+        log.info("Password reset (OTP flow) completed for user: {}", user.getEmail());
     }
 
     @Transactional
@@ -378,27 +470,36 @@ public class AuthService {
         }
     }
 
-    private void sendPasswordResetEmail(User user, String rawToken) {
+    private String generateOtp() {
+        // Cryptographically random 6-digit code, zero-padded so "000123" is valid.
+        int code = secureRandom.nextInt(1_000_000);
+        return String.format("%0" + OTP_LENGTH + "d", code);
+    }
+
+    private void sendPasswordResetOtpEmail(User user, String otp) {
         try {
             SimpleMailMessage message = new SimpleMailMessage();
             message.setFrom(fromEmail);
             message.setTo(user.getEmail());
-            message.setSubject("Reset your Ambiance Holidays password");
+            message.setSubject("Your Ambiance Holidays password reset code");
             message.setText(String.format("""
                     Dear %s,
 
-                    We received a request to reset your password. Use the token below in the reset form:
+                    We received a request to reset your password. Use the one-time code below
+                    on the reset form to continue:
 
-                    Token: %s
+                        %s
 
-                    This token expires in 1 hour. If you did not request this, please ignore this email.
+                    This code expires in %d minutes and can only be used once.
+                    If you did not request a password reset, you can safely ignore this email
+                    — your password has not been changed.
 
                     Best regards,
                     Ambiance Holidays Team
-                    """, user.getFirstName(), rawToken));
+                    """, user.getFirstName(), otp, OTP_EXPIRY_MINUTES));
             mailSender.send(message);
         } catch (Exception e) {
-            log.warn("Failed to send password reset email to {}: {}", user.getEmail(), e.getMessage());
+            log.warn("Failed to send password reset OTP to {}: {}", user.getEmail(), e.getMessage());
         }
     }
 }
