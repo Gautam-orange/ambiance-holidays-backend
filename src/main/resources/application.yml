@@ -95,6 +95,9 @@ app:
     publishable-key: ${STRIPE_PUBLISHABLE_KEY:pk_test_placeholder}
 
   peach:
+    # Bearer (Hosted Checkout) — set PEACH_SECRET_TOKEN to use this simpler flow.
+    secret-token: ${PEACH_SECRET_TOKEN:}
+    # OAuth (Embedded Checkout) — used only when secret-token is blank.
     client-id: ${PEACH_CLIENT_ID:}
     client-secret: ${PEACH_CLIENT_SECRET:}
     merchant-id: ${PEACH_MERCHANT_ID:}

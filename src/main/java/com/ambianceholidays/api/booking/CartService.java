@@ -187,6 +187,30 @@ public class CartService {
                 .orElse(new BigDecimal("15.00"));
     }
 
+    /**
+     * Validate that the requested adult count does not exceed the chosen car's
+     * passenger capacity. Frontend disables the +button at capacity, but the
+     * cart endpoint is reachable programmatically so we double-check server-side.
+     * Accepts both `adults` (rentals/transfers) and `paxAdults` (legacy/tours)
+     * keys for forward-compatibility.
+     */
+    private void validateAdultCount(Map<String, Object> options, short capacity, String carName) {
+        if (options == null) return;
+        Integer adults = null;
+        if (options.get("adults") instanceof Number n)        adults = n.intValue();
+        else if (options.get("paxAdults") instanceof Number n) adults = n.intValue();
+        if (adults == null) return;
+        if (adults < 1) {
+            throw BusinessException.badRequest("INVALID_PAX",
+                    "Number of adults must be at least 1.");
+        }
+        if (adults > capacity) {
+            throw BusinessException.badRequest("PAX_OVER_CAPACITY",
+                    carName + " seats only " + capacity + " passenger" + (capacity == 1 ? "" : "s")
+                    + " — you selected " + adults + ".");
+        }
+    }
+
     private int resolvePrice(BookingItemType type, UUID refId, Map<String, Object> options) {
         return switch (type) {
             case CAR_RENTAL -> {
@@ -194,6 +218,11 @@ public class CartService {
                         .orElseThrow(() -> BusinessException.notFound("Car"));
                 if (car.getStatus().name().equals("INACTIVE"))
                     throw BusinessException.badRequest("PRODUCT_INACTIVE", "Car is not available for booking");
+
+                // Pax-vs-capacity guard. The frontend caps the +button at the
+                // car's seat count, but cart-add can be hit programmatically.
+                validateAdultCount(options, car.getPassengerCapacity(), car.getName());
+
                 int rentalDays = options != null && options.get("rentalDays") instanceof Number n
                         ? Math.max(1, n.intValue()) : 1;
                 // Availability check against blocked dates
@@ -225,17 +254,47 @@ public class CartService {
                 yield basePrice + extrasTotal;
             }
             case CAR_TRANSFER -> {
-                // refId is now a TransferPricingTier UUID (distance-based pricing)
-                // Price was pre-calculated on the frontend and stored in options.unitPriceCents
-                // We validate the tier still exists and is active, then use its price
+                // Pricing model: each car carries its own PER_KM rate bands
+                // (CarRate rows with kmFrom/kmTo). Final price = the band whose
+                // [kmFrom, kmTo] contains options.distanceKm.
+                //
+                // refId for a CAR_TRANSFER cart line is the chosen Car id.
+                // options.distanceKm is the computed straight-line distance.
                 int priceCents = 0;
+                int distanceKm = options != null && options.get("distanceKm") instanceof Number n
+                        ? n.intValue() : 0;
+
                 if (refId != null) {
-                    var tier = transferPricingRepo.findById(refId);
-                    if (tier.isPresent() && tier.get().isActive()) {
-                        priceCents = tier.get().getPriceCents();
+                    // Try as a Car id first (the new model)
+                    var carOpt = carRepo.findByIdAndDeletedAtIsNull(refId);
+                    if (carOpt.isPresent()) {
+                        validateAdultCount(options, carOpt.get().getPassengerCapacity(), carOpt.get().getName());
+                        var matchingBand = carOpt.get().getRates().stream()
+                                .filter(r -> r.getPeriod() == RatePeriod.PER_KM)
+                                .filter(r -> {
+                                    int from = r.getKmFrom() != null ? r.getKmFrom() : 0;
+                                    int to   = r.getKmTo()   != null ? r.getKmTo()   : Integer.MAX_VALUE;
+                                    return distanceKm >= from && distanceKm <= to;
+                                })
+                                .findFirst();
+                        if (matchingBand.isPresent()) {
+                            priceCents = matchingBand.get().getAmountCents();
+                        } else {
+                            throw BusinessException.badRequest(
+                                    "NO_RATE_BAND",
+                                    "This car has no transfer rate covering " + distanceKm + " km. Please contact us for a custom quote."
+                            );
+                        }
+                    } else {
+                        // Legacy fallback: refId points at a TransferPricingTier (old cart items)
+                        var tier = transferPricingRepo.findById(refId);
+                        if (tier.isPresent() && tier.get().isActive()) {
+                            priceCents = tier.get().getPriceCents();
+                        }
                     }
                 }
-                // Fall back to unitPriceCents from options if tier not found (e.g. custom quote)
+
+                // Final safety net — pre-computed price from the frontend.
                 if (priceCents == 0 && options != null && options.get("unitPriceCents") instanceof Number n) {
                     priceCents = n.intValue();
                 }

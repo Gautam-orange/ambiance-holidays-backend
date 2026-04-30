@@ -31,6 +31,14 @@ public class TransferPricingTier {
     @Column(name = "sort_order", nullable = false)
     private short sortOrder = 0;
 
+    /** "What's Included" bullets — one phrase per array element. */
+    @Column(name = "includes", columnDefinition = "TEXT[]")
+    private String[] includes;
+
+    /** "Exclusions" bullets — one phrase per array element. */
+    @Column(name = "excludes", columnDefinition = "TEXT[]")
+    private String[] excludes;
+
     @Column(name = "created_at", updatable = false)
     private OffsetDateTime createdAt = OffsetDateTime.now();
 
@@ -52,6 +60,10 @@ public class TransferPricingTier {
     public void setActive(boolean active) { this.active = active; }
     public short getSortOrder() { return sortOrder; }
     public void setSortOrder(short sortOrder) { this.sortOrder = sortOrder; }
+    public String[] getIncludes() { return includes; }
+    public void setIncludes(String[] includes) { this.includes = includes; }
+    public String[] getExcludes() { return excludes; }
+    public void setExcludes(String[] excludes) { this.excludes = excludes; }
     public OffsetDateTime getCreatedAt() { return createdAt; }
     public OffsetDateTime getUpdatedAt() { return updatedAt; }
 }

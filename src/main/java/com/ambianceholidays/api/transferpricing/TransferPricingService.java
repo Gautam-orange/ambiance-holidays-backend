@@ -87,5 +87,7 @@ public class TransferPricingService {
         t.setPriceCents(req.priceCents());
         t.setActive(req.active());
         t.setSortOrder(req.sortOrder());
+        t.setIncludes(req.includes() == null ? new String[0] : req.includes().toArray(new String[0]));
+        t.setExcludes(req.excludes() == null ? new String[0] : req.excludes().toArray(new String[0]));
     }
 }

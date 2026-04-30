@@ -37,6 +37,8 @@ public class CarService {
             throw BusinessException.conflict("REGISTRATION_EXISTS", "Registration number already exists");
         }
 
+        validateRates(request);
+
         Supplier supplier = resolveSupplier(request.getSupplierId());
 
         Car car = Car.builder()
@@ -74,6 +76,8 @@ public class CarService {
                 throw BusinessException.conflict("REGISTRATION_EXISTS", "Registration number already in use");
             }
         }
+
+        validateRates(request);
 
         Supplier supplier = resolveSupplier(request.getSupplierId());
 
@@ -270,6 +274,70 @@ public class CarService {
         if (supplierId == null) return null;
         return supplierRepository.findByIdAndDeletedAtIsNull(supplierId)
                 .orElseThrow(() -> BusinessException.notFound("Supplier not found"));
+    }
+
+    /**
+     * Validate the rates submitted with a CarRequest. Rules:
+     *  - Transfer-eligible cars (TRANSFER, BOTH) must have at least one PER_KM band.
+     *  - Each band's amountCents must be ≥ 0.
+     *  - kmFrom must be ≥ 0; if kmTo is set it must be > kmFrom.
+     *  - PER_KM bands on the same car must not overlap.
+     *  Rental periods (DAILY/WEEKLY/MONTHLY) only require amountCents ≥ 0.
+     */
+    private void validateRates(CarRequest request) {
+        List<CarRateRequest> rates = request.getRates();
+        boolean isTransferEligible = request.getUsageType() == CarUsageType.TRANSFER
+                || request.getUsageType() == CarUsageType.BOTH;
+
+        // Per-row checks
+        if (rates != null) {
+            for (int i = 0; i < rates.size(); i++) {
+                CarRateRequest r = rates.get(i);
+                if (r.getAmountCents() == null || r.getAmountCents() < 0) {
+                    throw BusinessException.badRequest("INVALID_RATE",
+                            "Rate row " + (i + 1) + ": price must be a non-negative number.");
+                }
+                if (r.getPeriod() == RatePeriod.PER_KM) {
+                    int from = r.getKmFrom() != null ? r.getKmFrom() : 0;
+                    if (from < 0) {
+                        throw BusinessException.badRequest("INVALID_RATE",
+                                "Transfer band " + (i + 1) + ": From-km cannot be negative.");
+                    }
+                    if (r.getKmTo() != null && r.getKmTo() <= from) {
+                        throw BusinessException.badRequest("INVALID_RATE",
+                                "Transfer band " + (i + 1) + ": To-km must be greater than From-km.");
+                    }
+                }
+            }
+        }
+
+        // Transfer-specific overlap + presence rules
+        if (isTransferEligible) {
+            List<CarRateRequest> perKm = rates == null ? List.of() :
+                    rates.stream().filter(r -> r.getPeriod() == RatePeriod.PER_KM).toList();
+            if (perKm.isEmpty()) {
+                throw BusinessException.badRequest("MISSING_TRANSFER_RATES",
+                        "Transfer-eligible cars need at least one PER_KM rate band.");
+            }
+            // Sort by kmFrom and check for overlaps
+            var sorted = new ArrayList<>(perKm);
+            sorted.sort((a, b) -> {
+                int af = a.getKmFrom() != null ? a.getKmFrom() : 0;
+                int bf = b.getKmFrom() != null ? b.getKmFrom() : 0;
+                return Integer.compare(af, bf);
+            });
+            for (int i = 1; i < sorted.size(); i++) {
+                CarRateRequest prev = sorted.get(i - 1);
+                CarRateRequest curr = sorted.get(i);
+                int prevTo = prev.getKmTo() != null ? prev.getKmTo() : Integer.MAX_VALUE;
+                int currFrom = curr.getKmFrom() != null ? curr.getKmFrom() : 0;
+                if (currFrom <= prevTo) {
+                    throw BusinessException.badRequest("OVERLAPPING_BANDS",
+                            "Transfer bands overlap: band ending at " + prevTo +
+                            " km conflicts with band starting at " + currFrom + " km.");
+                }
+            }
+        }
     }
 
     private List<CarRate> saveRates(Car car, List<CarRateRequest> rateRequests) {

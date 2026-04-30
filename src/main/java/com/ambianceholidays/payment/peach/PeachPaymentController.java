@@ -13,6 +13,7 @@ import com.ambianceholidays.domain.payment.PaymentStatus;
 import com.ambianceholidays.domain.user.UserRepository;
 import com.ambianceholidays.exception.BusinessException;
 import com.ambianceholidays.security.SecurityPrincipal;
+import jakarta.servlet.http.HttpServletResponse;
 import jakarta.validation.Valid;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -22,10 +23,25 @@ import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.*;
 
+import java.io.IOException;
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Map;
 import java.util.UUID;
 
+/**
+ * Peach Payments V1 Hosted Checkout controller.
+ *
+ *  POST /payments/peach/initiate  → builds the form params + signature, returns
+ *                                   them to the frontend which auto-submits to
+ *                                   testsecure.peachpayments.com/checkout
+ *  POST /payments/peach/return    → Peach POSTs the result here. We update the
+ *                                   booking and 302-redirect the customer's
+ *                                   browser to the SPA /payment/return page.
+ *  GET  /payments/peach/status    → SPA polls this to render success/failure UI.
+ */
 @RestController
 @RequestMapping("/payments/peach")
 public class PeachPaymentController {
@@ -55,8 +71,8 @@ public class PeachPaymentController {
     }
 
     /**
-     * Create a booking (PENDING) and a Peach checkout. Returns the redirectUrl
-     * the frontend should send the browser to.
+     * Create a PENDING booking and return the signed Peach form params.
+     * The frontend then auto-submits an HTML form to Peach's hosted page.
      */
     @PostMapping("/initiate")
     @ResponseStatus(HttpStatus.CREATED)
@@ -75,7 +91,11 @@ public class PeachPaymentController {
 
         String resolvedCurrency = (currency != null && !currency.isBlank())
                 ? currency.toUpperCase() : props.getDefaultCurrency();
-        String shopperResultUrl = props.getReturnBaseUrl() + "/payment/return";
+
+        // Peach must POST back to OUR backend so we can verify the signature
+        // server-side, update the payment row, then redirect the customer's
+        // browser to the SPA result page. (A SPA route can't read POST body.)
+        String shopperResultUrl = backendBaseUrl() + "/payments/peach/return";
 
         PeachCheckoutService.CreateResult result = peach.createCheckout(
                 booking.getTotalCents(), resolvedCurrency, booking.getReference(), shopperResultUrl);
@@ -86,80 +106,135 @@ public class PeachPaymentController {
         payment.setAmountCents(booking.getTotalCents());
         payment.setCurrency(resolvedCurrency);
         payment.setStatus(PaymentStatus.PENDING);
+        // V1 has no separate checkoutId — we use the booking reference as the local key.
         payment.setPeachCheckoutId(result.checkoutId());
         paymentRepo.save(payment);
 
-        // Stash sessionKey + currency for the return handler so we can finalize the cart
         redis.opsForValue().set(SESSION_KEY_PREFIX + result.checkoutId(),
                 sessionKey, Duration.ofHours(2));
         redis.opsForValue().set(CURRENCY_KEY_PREFIX + result.checkoutId(),
                 resolvedCurrency, Duration.ofHours(2));
 
-        log.info("Peach checkout {} initiated for booking {} ({} {})",
-                result.checkoutId(), booking.getReference(), resolvedCurrency,
-                booking.getTotalCents());
+        log.info("Peach V1 checkout initiated for booking {} ({} {})",
+                booking.getReference(), resolvedCurrency, booking.getTotalCents());
 
         return ApiResponse.ok(new InitiateResponse(
                 booking.getId(), booking.getReference(),
-                result.checkoutId(), result.redirectUrl()));
+                result.checkoutId(), result.submitUrl(), result.formFields()));
     }
 
     /**
-     * Called by the frontend after Peach redirects the user back. Polls Peach
-     * for the final result and updates booking + payment.
+     * Receives Peach's POST result, verifies the signature, updates the booking,
+     * then redirects the customer's browser to the SPA result page with query
+     * parameters describing the outcome.
+     *
+     * Mounted under /api/v1/payments/peach/return — make sure the merchant
+     * configures shopperResultUrl accordingly.
      */
-    @GetMapping("/status")
+    @PostMapping(value = "/return", consumes = "application/x-www-form-urlencoded")
     @Transactional
-    public ApiResponse<StatusResponse> status(@RequestParam String checkoutId) {
-        Payment payment = paymentRepo.findByPeachCheckoutId(checkoutId)
-                .orElseThrow(() -> BusinessException.notFound("Payment"));
+    public void returnFromPeach(@RequestParam Map<String, String> params,
+                                HttpServletResponse response) throws IOException {
+        String merchantTxId = params.get("merchantTransactionId");
+        String resultCode   = params.get("result.code");
+        String resultDesc   = params.get("result.description");
+        String paymentId    = params.get("id");
+        String signature    = params.get("signature");
 
-        // If already finalized, return cached state — Peach status endpoint can be
-        // called repeatedly (e.g. user refreshes the return page), but we only
-        // want to flip the booking once.
-        if (payment.getStatus() == PaymentStatus.SUCCEEDED) {
-            return ApiResponse.ok(StatusResponse.from(payment, true));
-        }
-        if (payment.getStatus() == PaymentStatus.FAILED) {
-            return ApiResponse.ok(StatusResponse.from(payment, false));
+        if (merchantTxId == null || merchantTxId.isBlank()) {
+            log.warn("Peach return POST missing merchantTransactionId — params={}", params.keySet());
+            redirectToFrontend(response, null, false, "INVALID_RETURN");
+            return;
         }
 
-        PeachCheckoutService.StatusResult result = peach.getStatus(checkoutId);
-        payment.setPeachResultCode(result.code());
-        payment.setPeachResultDesc(result.description());
-        payment.setPeachPaymentId(result.paymentId());
+        // Verify HMAC signature so we know this POST really came from Peach.
+        if (!peach.verifyResultSignature(params, signature)) {
+            log.error("Peach return signature INVALID for txId={}", merchantTxId);
+            redirectToFrontend(response, merchantTxId, false, "BAD_SIGNATURE");
+            return;
+        }
+
+        Payment payment = paymentRepo.findByPeachCheckoutId(merchantTxId).orElse(null);
+        if (payment == null) {
+            log.warn("Peach return for unknown merchantTxId={}", merchantTxId);
+            redirectToFrontend(response, merchantTxId, false, "UNKNOWN_BOOKING");
+            return;
+        }
+
+        payment.setPeachResultCode(resultCode);
+        payment.setPeachResultDesc(resultDesc);
+        payment.setPeachPaymentId(paymentId);
 
         Booking booking = payment.getBooking();
-        if (result.success()) {
+        boolean success = peach.isSuccessCode(resultCode);
+
+        if (success) {
             payment.setStatus(PaymentStatus.SUCCEEDED);
             payment.setPaidAt(Instant.now());
             booking.setStatus(BookingStatus.CONFIRMED);
             bookingRepo.save(booking);
             paymentRepo.save(payment);
 
-            String sessionKey = redis.opsForValue().get(SESSION_KEY_PREFIX + checkoutId);
+            String sessionKey = redis.opsForValue().get(SESSION_KEY_PREFIX + merchantTxId);
             try {
                 bookingService.finalizeBooking(booking, sessionKey);
             } catch (Exception e) {
-                log.warn("finalizeBooking failed for {} but payment is already saved: {}",
+                log.warn("finalizeBooking failed for {} but payment is saved: {}",
                         booking.getReference(), e.getMessage());
             }
-            redis.delete(SESSION_KEY_PREFIX + checkoutId);
-            redis.delete(CURRENCY_KEY_PREFIX + checkoutId);
+            redis.delete(SESSION_KEY_PREFIX + merchantTxId);
+            redis.delete(CURRENCY_KEY_PREFIX + merchantTxId);
             log.info("Peach payment SUCCESS for booking {} (code={})",
-                    booking.getReference(), result.code());
-            return ApiResponse.ok(StatusResponse.from(payment, true));
+                    booking.getReference(), resultCode);
         } else {
             payment.setStatus(PaymentStatus.FAILED);
             paymentRepo.save(payment);
             log.info("Peach payment FAILED for booking {} (code={}, desc={})",
-                    booking.getReference(), result.code(), result.description());
-            return ApiResponse.ok(StatusResponse.from(payment, false));
+                    booking.getReference(), resultCode, resultDesc);
         }
+
+        redirectToFrontend(response, booking.getReference(), success, resultCode);
     }
 
+    /**
+     * Status check used by the SPA result page to render the final outcome
+     * (the result was already persisted by the /return handler so this is
+     * just a read).
+     */
+    @GetMapping("/status")
+    @Transactional(readOnly = true)
+    public ApiResponse<StatusResponse> status(@RequestParam String checkoutId) {
+        Payment payment = paymentRepo.findByPeachCheckoutId(checkoutId)
+                .orElseThrow(() -> BusinessException.notFound("Payment"));
+        boolean success = payment.getStatus() == PaymentStatus.SUCCEEDED;
+        return ApiResponse.ok(StatusResponse.from(payment, success));
+    }
+
+    private void redirectToFrontend(HttpServletResponse response, String ref,
+                                    boolean success, String code) throws IOException {
+        StringBuilder url = new StringBuilder(props.getReturnBaseUrl()).append("/payment/return?");
+        url.append("status=").append(success ? "success" : "failed");
+        if (ref != null) url.append("&ref=").append(URLEncoder.encode(ref, StandardCharsets.UTF_8));
+        if (code != null) url.append("&code=").append(URLEncoder.encode(code, StandardCharsets.UTF_8));
+        response.setStatus(HttpServletResponse.SC_SEE_OTHER);
+        response.setHeader("Location", url.toString());
+    }
+
+    /** Best-effort backend base URL for shopperResultUrl. Honours app.peach.backend-base-url if set. */
+    private String backendBaseUrl() {
+        String configured = System.getenv("PEACH_BACKEND_BASE_URL");
+        if (configured != null && !configured.isBlank()) return configured;
+        // Fallback — local dev. Production should set the env var.
+        return "http://localhost:8080/api/v1";
+    }
+
+    /**
+     * @param submitUrl   URL the frontend should POST the form to
+     * @param formFields  All form fields including the signature
+     */
     public record InitiateResponse(UUID bookingId, String bookingReference,
-                                   String checkoutId, String redirectUrl) {}
+                                   String checkoutId, String submitUrl,
+                                   Map<String, String> formFields) {}
 
     public record StatusResponse(boolean success, String bookingId, String bookingReference,
                                  BookingStatus bookingStatus, PaymentStatus paymentStatus,

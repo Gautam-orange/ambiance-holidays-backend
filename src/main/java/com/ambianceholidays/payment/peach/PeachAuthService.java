@@ -37,6 +37,14 @@ public class PeachAuthService {
             throw BusinessException.badRequest("PEACH_NOT_CONFIGURED",
                     "Peach Payments credentials are not configured");
         }
+        // Hosted Checkout (Bearer) flow — the secret token IS the bearer.
+        // No OAuth handshake needed. This matches the "Hosted Checkout" block
+        // in the Peach dashboard (Entity ID + Secret token) and works without
+        // the merchant having OAuth/Embedded Checkout activated.
+        if (props.useBearer()) {
+            return props.getSecretToken();
+        }
+        // Embedded Checkout (OAuth) flow — fetch + cache the access token.
         String cached = redis.opsForValue().get(CACHE_KEY);
         if (cached != null && !cached.isBlank()) return cached;
         return fetchAndCache();
@@ -55,6 +63,21 @@ public class PeachAuthService {
         );
 
         log.info("Requesting Peach OAuth token from {}", url);
+        // Debug: log first/last 6 chars of each credential so we can confirm the
+        // request actually carries what's configured (without leaking full secrets).
+        String cid = props.getClientId();
+        String csec = props.getClientSecret();
+        String mid = props.getMerchantId();
+        log.info("  clientId len={} prefix={} suffix={}",
+                cid.length(), cid.substring(0, Math.min(6, cid.length())),
+                cid.length() > 6 ? cid.substring(cid.length() - 6) : "");
+        log.info("  clientSecret len={} prefix={} suffix={}",
+                csec.length(), csec.substring(0, Math.min(6, csec.length())),
+                csec.length() > 6 ? csec.substring(csec.length() - 6) : "");
+        log.info("  merchantId len={} prefix={} suffix={}",
+                mid.length(), mid.substring(0, Math.min(6, mid.length())),
+                mid.length() > 6 ? mid.substring(mid.length() - 6) : "");
+
         String response;
         try {
             response = http.post()
