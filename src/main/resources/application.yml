@@ -82,7 +82,10 @@ app:
     refresh-token-expiry-days: 30
 
   cors:
-    allowed-origins: ${CORS_ORIGINS:http://localhost:3000}
+    # Comma-separated list. The fallback covers local dev (Vite on :3000),
+    # the deployed site, and Peach's hosted-checkout domain (so the customer's
+    # browser can hit our /payments/peach/return after Peach redirects back).
+    allowed-origins: ${CORS_ORIGINS:http://localhost:3000,https://ambianceholidays.ciadmin.in,https://testsecure.peachpayments.com}
 
   s3:
     bucket: ${S3_BUCKET:ambiance-media}
