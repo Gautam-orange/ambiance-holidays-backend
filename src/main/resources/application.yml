@@ -1,11 +1,16 @@
 spring:
   profiles:
-    active: dev
+    active: default
 
   application:
     name: ambiance-holidays-api
 
   datasource:
+    # Env-driven — production server pe systemd EnvironmentFile me set karo:
+    #   DB_URL=jdbc:postgresql://192.168.200.34:5432/ambianceholidays
+    #   DB_USERNAME=ambianceholidays
+    #   DB_PASSWORD=...
+    # Local dev pe env nahi hota → fallback localhost wala use hoga.
     url: ${DB_URL:jdbc:postgresql://localhost:5432/ambiance_holidays}
     username: ${DB_USERNAME:ambiance}
     password: ${DB_PASSWORD:ambiance}
@@ -53,7 +58,7 @@ spring:
             enable: true
 
 server:
-  port: 8080
+  port: ${SERVER_PORT:8081}
   servlet:
     context-path: /api/v1
   compression:
@@ -95,15 +100,16 @@ app:
     publishable-key: ${STRIPE_PUBLISHABLE_KEY:pk_test_placeholder}
 
   peach:
-    # Bearer (Hosted Checkout) — set PEACH_SECRET_TOKEN to use this simpler flow.
+    # Bearer (V1 Hosted Checkout) — set PEACH_SECRET_TOKEN to use this simpler flow.
     secret-token: ${PEACH_SECRET_TOKEN:}
-    # OAuth (Embedded Checkout) — used only when secret-token is blank.
+    # OAuth (V2 Hosted/Embedded Checkout) — used only when secret-token is blank.
     client-id: ${PEACH_CLIENT_ID:}
     client-secret: ${PEACH_CLIENT_SECRET:}
     merchant-id: ${PEACH_MERCHANT_ID:}
     entity-id: ${PEACH_ENTITY_ID:}
     auth-base-url: ${PEACH_AUTH_BASE_URL:https://sandbox-dashboard.peachpayments.com}
-    checkout-base-url: ${PEACH_CHECKOUT_BASE_URL:https://sandbox-checkout.peachpayments.com}
+    # NOTE: V2 hosted checkout's API base is testsecure, not sandbox-checkout.
+    checkout-base-url: ${PEACH_CHECKOUT_BASE_URL:https://testsecure.peachpayments.com}
     return-base-url: ${PEACH_RETURN_BASE_URL:http://localhost:3000}
     default-currency: ${PEACH_DEFAULT_CURRENCY:USD}
 
