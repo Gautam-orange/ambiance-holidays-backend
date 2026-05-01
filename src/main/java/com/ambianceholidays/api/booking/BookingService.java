@@ -74,14 +74,28 @@ public class BookingService {
         List<CartItem> cartItems = cartService.getActiveItems(sessionKey);
         if (cartItems.isEmpty()) throw BusinessException.badRequest("EMPTY_CART", "Cart is empty");
 
-        // Resolve or create customer
+        // Resolve or create customer. We update the row even if it already
+        // exists so the latest details (whatsapp / nationality / address)
+        // captured at checkout aren't silently dropped on repeat customers.
         Customer customer = customerRepo.findByEmailAndDeletedAtIsNull(req.customerEmail())
+                .map(existing -> {
+                    existing.setFirstName(req.customerFirstName());
+                    existing.setLastName(req.customerLastName());
+                    if (req.customerPhone() != null) existing.setPhone(req.customerPhone());
+                    if (req.whatsappNumber() != null) existing.setWhatsapp(req.whatsappNumber());
+                    if (req.nationality() != null)   existing.setNationality(req.nationality());
+                    if (req.address() != null)       existing.setAddress(req.address());
+                    return customerRepo.save(existing);
+                })
                 .orElseGet(() -> {
                     Customer c = new Customer();
                     c.setFirstName(req.customerFirstName());
                     c.setLastName(req.customerLastName());
                     c.setEmail(req.customerEmail());
                     c.setPhone(req.customerPhone());
+                    c.setWhatsapp(req.whatsappNumber());
+                    c.setNationality(req.nationality());
+                    c.setAddress(req.address());
                     return customerRepo.save(c);
                 });
 
