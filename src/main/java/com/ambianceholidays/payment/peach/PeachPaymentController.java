@@ -28,16 +28,17 @@ import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Map;
 import java.util.UUID;
 
 /**
  * Peach Payments V2 Hosted Checkout controller.
  *
- *  POST /payments/peach/initiate  — creates a PENDING booking + a V2 Peach
- *                                   checkout, returns the redirectUrl the
- *                                   frontend should send the browser to.
- *  GET  /payments/peach/status    — polls Peach for the result by checkoutId
- *                                   and updates booking + payment.
+ *  POST /payments/peach/initiate         create PENDING booking + Peach checkout, return redirectUrl
+ *  GET  /payments/peach/status           SPA polls — re-queries Peach if not yet terminal
+ *  POST /payments/peach/retry/{bookingId}  re-create checkout against an existing FAILED booking
+ *  GET|POST /payments/peach/return       browser redirect from Peach; verifies via API then redirects to SPA
+ *  POST /payments/peach/webhook          server-to-server callback from Peach (no body trust — verifies via API)
  */
 @RestController
 @RequestMapping("/payments/peach")
@@ -81,51 +82,75 @@ public class PeachPaymentController {
         var actor = principal != null ? userRepo.findById(principal.getUserId()).orElse(null) : null;
 
         Booking booking = bookingService.createPendingBooking(sessionKey, req, actor);
-
         String resolvedCurrency = (currency != null && !currency.isBlank())
                 ? currency.toUpperCase() : props.getDefaultCurrency();
 
-        // Peach V2 validates shopperResultUrl against a strict FQDN regex —
-        // localhost is rejected. Point it at our backend's /return endpoint
-        // (which sits behind the ngrok tunnel in dev) so we can then redirect
-        // the customer's browser to the local SPA.
-        String shopperResultUrl = backendBaseUrl() + "/payments/peach/return";
+        return ApiResponse.ok(startCheckout(booking, resolvedCurrency, sessionKey, /*newPayment=*/true));
+    }
 
+    /**
+     * Re-attempt payment against an existing booking whose previous Payment is FAILED.
+     * Marks the failed payment row as superseded by creating a fresh PENDING Payment +
+     * new Peach checkoutId. Booking.reference stays the same so user-facing IDs are stable.
+     */
+    @PostMapping("/retry/{bookingId}")
+    @Transactional
+    public ApiResponse<InitiateResponse> retry(@PathVariable UUID bookingId,
+                                               @AuthenticationPrincipal SecurityPrincipal principal,
+                                               @RequestHeader(value = "X-Cart-Id", required = false) String cartId,
+                                               @RequestParam(required = false) String currency) {
+        Booking booking = bookingRepo.findById(bookingId)
+                .orElseThrow(() -> BusinessException.notFound("Booking"));
+
+        if (booking.getStatus() == BookingStatus.CONFIRMED || booking.getStatus() == BookingStatus.CANCELLED) {
+            throw BusinessException.badRequest("BOOKING_NOT_RETRIABLE",
+                    "Cannot retry payment for a " + booking.getStatus() + " booking");
+        }
+
+        // Refuse retry if there's already a PENDING/SUCCEEDED Payment we should be honouring.
+        boolean hasOpenPayment = paymentRepo.findByBookingId(booking.getId()).stream()
+                .anyMatch(p -> p.getStatus() == PaymentStatus.PENDING || p.getStatus() == PaymentStatus.SUCCEEDED);
+        if (hasOpenPayment) {
+            throw BusinessException.badRequest("PAYMENT_ALREADY_OPEN",
+                    "An existing pending or successful payment exists for this booking");
+        }
+
+        String sessionKey = principal != null ? "user:" + principal.getUserId()
+                : (cartId != null && !cartId.isBlank() ? "guest:" + cartId : "guest:anonymous");
+        String resolvedCurrency = (currency != null && !currency.isBlank())
+                ? currency.toUpperCase() : props.getDefaultCurrency();
+
+        return ApiResponse.ok(startCheckout(booking, resolvedCurrency, sessionKey, /*newPayment=*/true));
+    }
+
+    /** Shared between /initiate and /retry. */
+    private InitiateResponse startCheckout(Booking booking, String currency, String sessionKey, boolean newPayment) {
+        String shopperResultUrl = backendBaseUrl() + "/payments/peach/return";
         PeachCheckoutService.CreateResult result = peach.createCheckout(
-                booking.getTotalCents(), resolvedCurrency, booking.getReference(), shopperResultUrl);
+                booking.getTotalCents(), currency, booking.getReference(), shopperResultUrl);
 
         Payment payment = new Payment();
         payment.setBooking(booking);
         payment.setMethod(PaymentMethod.PEACH);
         payment.setAmountCents(booking.getTotalCents());
-        payment.setCurrency(resolvedCurrency);
+        payment.setCurrency(currency);
         payment.setStatus(PaymentStatus.PENDING);
         payment.setPeachCheckoutId(result.checkoutId());
         paymentRepo.save(payment);
 
-        // Stash sessionKey for the status handler so we can finalize the cart.
         redis.opsForValue().set(SESSION_KEY_PREFIX + result.checkoutId(),
                 sessionKey, Duration.ofHours(2));
         redis.opsForValue().set(CURRENCY_KEY_PREFIX + result.checkoutId(),
-                resolvedCurrency, Duration.ofHours(2));
+                currency, Duration.ofHours(2));
 
-        log.info("Peach V2 checkout {} initiated for booking {} ({} {})",
-                result.checkoutId(), booking.getReference(), resolvedCurrency,
-                booking.getTotalCents());
+        log.info("Peach checkout {} created for booking {} ({} {}{})",
+                result.checkoutId(), booking.getReference(), currency,
+                booking.getTotalCents(), newPayment ? "" : " [retry]");
 
-        return ApiResponse.ok(new InitiateResponse(
-                booking.getId(), booking.getReference(),
-                result.checkoutId(), result.redirectUrl()));
+        return new InitiateResponse(booking.getId(), booking.getReference(),
+                result.checkoutId(), result.redirectUrl());
     }
 
-    /**
-     * Polled by the SPA after Peach redirects the customer back.
-     *
-     * Accepts either ?checkoutId=<peach-checkout-id> (legacy) or
-     * ?ref=<value>. ref can be: our booking reference (matches Booking.reference
-     * → traced to payment), the original checkoutId, or anything we stored as
-     * peach_checkout_id. Falls back through the candidates in that order.
-     */
     @GetMapping("/status")
     @Transactional
     public ApiResponse<StatusResponse> status(@RequestParam(required = false) String checkoutId,
@@ -138,60 +163,25 @@ public class PeachPaymentController {
                 .or(() -> bookingRepo.findByReference(key)
                         .flatMap(b -> paymentRepo.findByBookingId(b.getId()).stream().findFirst()))
                 .orElseThrow(() -> BusinessException.notFound("Payment"));
-        String resolvedCheckoutId = payment.getPeachCheckoutId();
 
-        if (payment.getStatus() == PaymentStatus.SUCCEEDED) {
-            return ApiResponse.ok(StatusResponse.from(payment, true));
-        }
-        if (payment.getStatus() == PaymentStatus.FAILED) {
-            return ApiResponse.ok(StatusResponse.from(payment, false));
-        }
+        // Already finalised — short-circuit, no Peach call needed.
+        if (payment.getStatus() == PaymentStatus.SUCCEEDED) return ApiResponse.ok(StatusResponse.from(payment, true));
+        if (payment.getStatus() == PaymentStatus.FAILED)    return ApiResponse.ok(StatusResponse.from(payment, false));
 
-        PeachCheckoutService.StatusResult result = peach.getStatus(resolvedCheckoutId);
-        payment.setPeachResultCode(result.code());
-        payment.setPeachResultDesc(result.description());
-        payment.setPeachPaymentId(result.paymentId());
-
-        Booking booking = payment.getBooking();
-        if (result.success()) {
-            payment.setStatus(PaymentStatus.SUCCEEDED);
-            payment.setPaidAt(Instant.now());
-            booking.setStatus(BookingStatus.CONFIRMED);
-            bookingRepo.save(booking);
-            paymentRepo.save(payment);
-
-            String sessionKey = redis.opsForValue().get(SESSION_KEY_PREFIX + resolvedCheckoutId);
-            try {
-                bookingService.finalizeBooking(booking, sessionKey);
-            } catch (Exception e) {
-                log.warn("finalizeBooking failed for {} but payment is already saved: {}",
-                        booking.getReference(), e.getMessage());
-            }
-            redis.delete(SESSION_KEY_PREFIX + resolvedCheckoutId);
-            redis.delete(CURRENCY_KEY_PREFIX + resolvedCheckoutId);
-            log.info("Peach payment SUCCESS for booking {} (code={})",
-                    booking.getReference(), result.code());
-            return ApiResponse.ok(StatusResponse.from(payment, true));
-        } else {
-            payment.setStatus(PaymentStatus.FAILED);
-            paymentRepo.save(payment);
-            log.info("Peach payment FAILED for booking {} (code={}, desc={})",
-                    booking.getReference(), result.code(), result.description());
-            return ApiResponse.ok(StatusResponse.from(payment, false));
-        }
+        // Authoritative: ask Peach.
+        PeachCheckoutService.StatusResult result = peach.getStatus(payment.getPeachCheckoutId());
+        applyResult(payment, result.code(), result.description(), result.paymentId(), result.success(), result.pending());
+        return ApiResponse.ok(StatusResponse.from(payment, payment.getStatus() == PaymentStatus.SUCCEEDED));
     }
 
     /**
-     * Peach V2 redirects the customer's browser here after the hosted checkout
-     * completes. Peach uses POST (form-encoded body with id, resourcePath,
-     * etc.) but some plugin variants use GET — we accept both. The id is
-     * extracted from query params first, then form body, then resourcePath
-     * tail. Then we 303-redirect to the SPA's /payment/return route.
+     * Browser redirect from Peach. We DO NOT trust the result.code in the redirect —
+     * it can be tampered with. Resolve the checkoutId, then call Peach's /v2/checkout/{id}/status
+     * API (authoritative) and apply that. Then redirect the browser to the SPA.
      */
-    @RequestMapping(value = "/return", method = { org.springframework.web.bind.annotation.RequestMethod.GET,
-                                                  org.springframework.web.bind.annotation.RequestMethod.POST })
+    @RequestMapping(value = "/return", method = { RequestMethod.GET, RequestMethod.POST })
     @Transactional
-    public void returnFromPeach(@RequestParam(required = false) java.util.Map<String, String> params,
+    public void returnFromPeach(@RequestParam(required = false) Map<String, String> params,
                                 HttpServletResponse response) throws IOException {
         log.info("Peach return params: {}", params.keySet());
 
@@ -199,42 +189,29 @@ public class PeachPaymentController {
         String resourcePath = params.get("resourcePath");
         String pathTail = resourcePath != null ? resourcePath.substring(resourcePath.lastIndexOf('/') + 1) : null;
         String id = params.get("id");
-        String checkoutId = params.get("checkoutId");
-        String resultCode = params.get("result.code");
-        String resultDesc = params.get("result.description");
+        String checkoutId = firstNonBlank(params.get("checkoutId"), id, pathTail);
 
-        // Peach posts result.code + result.description directly in the body —
-        // process it here, no need to query /v2/checkout/{id}/status afterwards.
-        if (merchantTxId != null && !merchantTxId.isBlank()) {
-            bookingRepo.findByReference(merchantTxId).ifPresent(booking -> {
-                paymentRepo.findByBookingId(booking.getId()).stream().findFirst().ifPresent(payment -> {
-                    payment.setPeachResultCode(resultCode);
-                    payment.setPeachResultDesc(resultDesc);
-                    payment.setPeachPaymentId(id);
-                    boolean success = peach.isSuccessCode(resultCode);
-                    if (success) {
-                        payment.setStatus(PaymentStatus.SUCCEEDED);
-                        payment.setPaidAt(Instant.now());
-                        booking.setStatus(BookingStatus.CONFIRMED);
-                        bookingRepo.save(booking);
-                        paymentRepo.save(payment);
-                        String sessionKey = redis.opsForValue().get(SESSION_KEY_PREFIX + payment.getPeachCheckoutId());
-                        try {
-                            bookingService.finalizeBooking(booking, sessionKey);
-                        } catch (Exception e) {
-                            log.warn("finalizeBooking failed for {}: {}", booking.getReference(), e.getMessage());
-                        }
-                        redis.delete(SESSION_KEY_PREFIX + payment.getPeachCheckoutId());
-                        redis.delete(CURRENCY_KEY_PREFIX + payment.getPeachCheckoutId());
-                        log.info("Peach payment SUCCESS for booking {} (code={})", booking.getReference(), resultCode);
-                    } else {
-                        payment.setStatus(PaymentStatus.FAILED);
-                        paymentRepo.save(payment);
-                        log.info("Peach payment FAILED for booking {} (code={}, desc={})",
-                                booking.getReference(), resultCode, resultDesc);
-                    }
-                });
-            });
+        // Resolve payment by any available identifier — checkoutId first, then merchantTxId.
+        Payment payment = null;
+        if (checkoutId != null && !checkoutId.isBlank()) {
+            payment = paymentRepo.findByPeachCheckoutId(checkoutId).orElse(null);
+        }
+        if (payment == null && merchantTxId != null && !merchantTxId.isBlank()) {
+            payment = bookingRepo.findByReference(merchantTxId)
+                    .flatMap(b -> paymentRepo.findByBookingId(b.getId()).stream().findFirst())
+                    .orElse(null);
+        }
+
+        if (payment != null && payment.getStatus() == PaymentStatus.PENDING) {
+            try {
+                PeachCheckoutService.StatusResult result = peach.getStatus(payment.getPeachCheckoutId());
+                applyResult(payment, result.code(), result.description(), result.paymentId(),
+                        result.success(), result.pending());
+            } catch (Exception e) {
+                // Don't break the redirect if the verify call fails — the SPA will poll /status.
+                log.warn("Peach /status verify on return failed for {}: {}",
+                        payment.getPeachCheckoutId(), e.getMessage());
+            }
         }
 
         String redirectKey = firstNonBlank(merchantTxId, pathTail, checkoutId, id);
@@ -242,9 +219,114 @@ public class PeachPaymentController {
         if (redirectKey != null && !redirectKey.isBlank()) {
             url.append("?ref=").append(URLEncoder.encode(redirectKey, StandardCharsets.UTF_8));
         }
-        log.info("Peach return redirect → {} (merchantTxId={}, code={})", url, merchantTxId, resultCode);
+        log.info("Peach return redirect → {} (merchantTxId={})", url, merchantTxId);
         response.setStatus(HttpServletResponse.SC_SEE_OTHER);
         response.setHeader("Location", url.toString());
+    }
+
+    /**
+     * Peach server-to-server webhook. Configure this endpoint URL in the Peach
+     * merchant dashboard. Peach posts the result asynchronously when payment
+     * is finalised — this guarantees we receive the outcome even if the
+     * customer closes the browser before the redirect.
+     *
+     * Body shape (typical): { "id": "<checkoutId>", "merchantTransactionId": "...",
+     *   "result": { "code": "000.000.000", "description": "..." }, "paymentId": "..." }
+     *
+     * We do NOT trust body codes. We extract the checkoutId then re-query
+     * Peach's status API to get the authoritative result.
+     */
+    @PostMapping("/webhook")
+    @Transactional
+    public ApiResponse<Map<String, String>> webhook(@RequestBody(required = false) Map<String, Object> body,
+                                                     @RequestParam(required = false) Map<String, String> queryParams) {
+        Map<String, String> q = queryParams != null ? queryParams : Map.of();
+        String checkoutId = stringFrom(body, "id");
+        if (checkoutId == null) checkoutId = stringFrom(body, "checkoutId");
+        if (checkoutId == null) checkoutId = q.get("id");
+        if (checkoutId == null) checkoutId = q.get("checkoutId");
+
+        String merchantTxId = stringFrom(body, "merchantTransactionId");
+        if (merchantTxId == null) merchantTxId = q.get("merchantTransactionId");
+
+        log.info("Peach webhook received: checkoutId={} merchantTxId={}", checkoutId, merchantTxId);
+
+        Payment payment = null;
+        if (checkoutId != null) {
+            payment = paymentRepo.findByPeachCheckoutId(checkoutId).orElse(null);
+        }
+        if (payment == null && merchantTxId != null) {
+            payment = bookingRepo.findByReference(merchantTxId)
+                    .flatMap(b -> paymentRepo.findByBookingId(b.getId()).stream().findFirst())
+                    .orElse(null);
+        }
+        if (payment == null) {
+            log.warn("Peach webhook: no Payment found for checkoutId={} merchantTxId={}", checkoutId, merchantTxId);
+            // 200 anyway so Peach doesn't retry forever
+            return ApiResponse.ok(Map.of("status", "ignored", "reason", "payment-not-found"));
+        }
+
+        // Idempotent: if already terminal, ack and skip.
+        if (payment.getStatus() == PaymentStatus.SUCCEEDED || payment.getStatus() == PaymentStatus.FAILED) {
+            return ApiResponse.ok(Map.of("status", "ack", "paymentStatus", payment.getStatus().name()));
+        }
+
+        // Authoritative re-query.
+        PeachCheckoutService.StatusResult result = peach.getStatus(payment.getPeachCheckoutId());
+        applyResult(payment, result.code(), result.description(), result.paymentId(),
+                result.success(), result.pending());
+
+        return ApiResponse.ok(Map.of(
+                "status", "ok",
+                "paymentStatus", payment.getStatus().name(),
+                "resultCode", result.code() != null ? result.code() : ""));
+    }
+
+    /**
+     * Single source of truth for translating a Peach result into Payment + Booking state.
+     * Idempotent: re-applying the same terminal result is a no-op.
+     */
+    private void applyResult(Payment payment, String resultCode, String resultDesc,
+                             String paymentId, boolean success, boolean pending) {
+        if (payment.getStatus() == PaymentStatus.SUCCEEDED || payment.getStatus() == PaymentStatus.FAILED) {
+            return; // already terminal, don't overwrite
+        }
+
+        payment.setPeachResultCode(resultCode);
+        payment.setPeachResultDesc(resultDesc);
+        if (paymentId != null && !paymentId.isBlank()) payment.setPeachPaymentId(paymentId);
+
+        Booking booking = payment.getBooking();
+        String checkoutId = payment.getPeachCheckoutId();
+
+        if (success) {
+            payment.setStatus(PaymentStatus.SUCCEEDED);
+            payment.setPaidAt(Instant.now());
+            booking.setStatus(BookingStatus.CONFIRMED);
+            bookingRepo.save(booking);
+            paymentRepo.save(payment);
+
+            String sessionKey = redis.opsForValue().get(SESSION_KEY_PREFIX + checkoutId);
+            try {
+                bookingService.finalizeBooking(booking, sessionKey);
+            } catch (Exception e) {
+                log.warn("finalizeBooking failed for {} but payment is already saved: {}",
+                        booking.getReference(), e.getMessage());
+            }
+            redis.delete(SESSION_KEY_PREFIX + checkoutId);
+            redis.delete(CURRENCY_KEY_PREFIX + checkoutId);
+            log.info("Peach payment SUCCESS for booking {} (code={})", booking.getReference(), resultCode);
+        } else if (pending) {
+            // Don't move Payment to a terminal state — keep PENDING.
+            paymentRepo.save(payment);
+            log.info("Peach payment still PENDING for booking {} (code={}, desc={})",
+                    booking.getReference(), resultCode, resultDesc);
+        } else {
+            payment.setStatus(PaymentStatus.FAILED);
+            paymentRepo.save(payment);
+            log.info("Peach payment FAILED for booking {} (code={}, desc={})",
+                    booking.getReference(), resultCode, resultDesc);
+        }
     }
 
     /** Best-effort backend base URL for shopperResultUrl. Reads app.peach.backend-base-url, then PEACH_BACKEND_BASE_URL env var. */
@@ -260,6 +342,25 @@ public class PeachPaymentController {
     private static String firstNonBlank(String... values) {
         for (String v : values) if (v != null && !v.isBlank()) return v;
         return null;
+    }
+
+    @SuppressWarnings("unchecked")
+    private static String stringFrom(Map<String, Object> body, String key) {
+        if (body == null) return null;
+        Object v = body.get(key);
+        if (v == null) {
+            // try nested "result.code"-style dotted access
+            int dot = key.indexOf('.');
+            if (dot > 0) {
+                Object outer = body.get(key.substring(0, dot));
+                if (outer instanceof Map<?, ?> m) {
+                    Object inner = m.get(key.substring(dot + 1));
+                    return inner != null ? inner.toString() : null;
+                }
+            }
+            return null;
+        }
+        return v.toString();
     }
 
     public record InitiateResponse(UUID bookingId, String bookingReference,

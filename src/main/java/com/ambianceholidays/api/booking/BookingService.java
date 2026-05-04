@@ -161,7 +161,12 @@ public class BookingService {
             int page, int size, User actor) {
         Specification<Booking> spec = buildSpec(search, status, agentId, dateFrom, dateTo, isEnquiry, actor);
         Page<Booking> pg = bookingRepo.findAll(spec, PageRequest.of(page, size, Sort.by("createdAt").descending()));
-        return ApiResponse.ok(pg.getContent().stream().map(BookingResponse::from).toList(),
+        // Batch-fetch latest payment per booking so admin list shows paid/pending/failed without N+1.
+        Map<UUID, Payment> latestByBooking = latestPaymentsFor(pg.getContent());
+        return ApiResponse.ok(
+                pg.getContent().stream()
+                        .map(b -> BookingResponse.from(b, latestByBooking.get(b.getId())))
+                        .toList(),
                 PageMeta.of(page, size, pg.getTotalElements()));
     }
 
@@ -169,7 +174,30 @@ public class BookingService {
     public ApiResponse<BookingResponse> get(UUID id, User actor) {
         Booking b = bookingRepo.findById(id).orElseThrow(() -> BusinessException.notFound("Booking"));
         checkAccess(b, actor);
-        return ApiResponse.ok(BookingResponse.from(b));
+        Payment latest = latestPaymentFor(b.getId());
+        return ApiResponse.ok(BookingResponse.from(b, latest));
+    }
+
+    /** Latest (by createdAt desc) Payment for a booking, or null if none. */
+    private Payment latestPaymentFor(UUID bookingId) {
+        return paymentRepo.findByBookingId(bookingId).stream()
+                .max(Comparator.comparing(Payment::getCreatedAt))
+                .orElse(null);
+    }
+
+    /** Latest Payment per booking ID for the supplied bookings — single batched query. */
+    private Map<UUID, Payment> latestPaymentsFor(List<Booking> bookings) {
+        if (bookings.isEmpty()) return Map.of();
+        List<UUID> ids = bookings.stream().map(Booking::getId).toList();
+        Map<UUID, Payment> out = new HashMap<>();
+        for (Payment p : paymentRepo.findByBookingIdIn(ids)) {
+            UUID bId = p.getBooking().getId();
+            Payment existing = out.get(bId);
+            if (existing == null || p.getCreatedAt().isAfter(existing.getCreatedAt())) {
+                out.put(bId, p);
+            }
+        }
+        return out;
     }
 
     // ── Status management ─────────────────────────────────────────────────────

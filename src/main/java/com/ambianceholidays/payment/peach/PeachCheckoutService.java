@@ -42,6 +42,16 @@ public class PeachCheckoutService {
     private static final Pattern SUCCESS_PATTERN =
             Pattern.compile("^(000\\.000\\.|000\\.100\\.1|000\\.[36]|000\\.400\\.0[^3]|000\\.400\\.100)");
 
+    /**
+     * Result codes that mean the transaction is still being processed and the
+     * outcome is not yet final. Customer should not be told the payment failed
+     * — we keep Payment.PENDING and wait for a later webhook / poll. Per Peach
+     * result-code reference: 000.200.* (pending), 800.400.5* (manual review),
+     * 100.396.101 (cancelled by user is FAILED, not pending).
+     */
+    private static final Pattern PENDING_PATTERN =
+            Pattern.compile("^(000\\.200\\.|800\\.400\\.5|100\\.400\\.500)");
+
     private final PeachProperties props;
     private final PeachAuthService auth;
     private final RestClient http;
@@ -102,8 +112,9 @@ public class PeachCheckoutService {
             String code = result.path("code").asText(null);
             String desc = result.path("description").asText(null);
             String paymentId = json.path("id").asText(null);
-            boolean success = code != null && SUCCESS_PATTERN.matcher(code).find();
-            return new StatusResult(success, code, desc, paymentId, response);
+            boolean success = isSuccessCode(code);
+            boolean pending = !success && isPendingCode(code);
+            return new StatusResult(success, pending, code, desc, paymentId, response);
         } catch (Exception e) {
             log.error("Failed to parse Peach status response: {}", e.getMessage());
             throw BusinessException.badRequest("PEACH_STATUS_FAILED",
@@ -114,6 +125,11 @@ public class PeachCheckoutService {
     /** Inspect a Peach result code and return whether it indicates success. */
     public boolean isSuccessCode(String code) {
         return code != null && SUCCESS_PATTERN.matcher(code).find();
+    }
+
+    /** True if the code means "still processing"; outcome is not yet final. */
+    public boolean isPendingCode(String code) {
+        return code != null && PENDING_PATTERN.matcher(code).find();
     }
 
     private String postJson(String url, Object body) {
@@ -224,6 +240,6 @@ public class PeachCheckoutService {
     }
 
     public record CreateResult(String checkoutId, String redirectUrl) {}
-    public record StatusResult(boolean success, String code, String description,
+    public record StatusResult(boolean success, boolean pending, String code, String description,
                                String paymentId, String rawResponse) {}
 }
