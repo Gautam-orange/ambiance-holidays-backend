@@ -247,9 +247,12 @@ public class PeachPaymentController {
         response.setHeader("Location", url.toString());
     }
 
-    /** Best-effort backend base URL for shopperResultUrl. Honours PEACH_BACKEND_BASE_URL when set. */
+    /** Best-effort backend base URL for shopperResultUrl. Reads app.peach.backend-base-url, then PEACH_BACKEND_BASE_URL env var. */
     private String backendBaseUrl() {
-        String configured = System.getenv("PEACH_BACKEND_BASE_URL");
+        String configured = props.getBackendBaseUrl();
+        if (configured == null || configured.isBlank()) {
+            configured = System.getenv("PEACH_BACKEND_BASE_URL");
+        }
         if (configured != null && !configured.isBlank()) return configured;
         return "http://localhost:8080/api/v1";
     }

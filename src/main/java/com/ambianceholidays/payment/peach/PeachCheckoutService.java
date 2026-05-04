@@ -203,8 +203,13 @@ public class PeachCheckoutService {
 
     private String originForRequest() {
         // Prefer the publicly-reachable backend host (set in dev to the
-        // ngrok URL); fallback to the SPA URL.
-        String configured = System.getenv("PEACH_BACKEND_BASE_URL");
+        // ngrok URL, in prod to the public domain); fallback to the SPA URL.
+        // Property wins over env var so application.yml is the source of truth;
+        // env var is honoured as a fallback for legacy deploys.
+        String configured = props.getBackendBaseUrl();
+        if (configured == null || configured.isBlank()) {
+            configured = System.getenv("PEACH_BACKEND_BASE_URL");
+        }
         String url = (configured != null && !configured.isBlank()) ? configured : props.getReturnBaseUrl();
         // Strip everything after the host (Origin must be scheme://host[:port], no path)
         try {

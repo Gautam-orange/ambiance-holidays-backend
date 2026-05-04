@@ -20,6 +20,7 @@ public class PeachProperties {
     private String secretToken;
     private String authBaseUrl;
     private String checkoutBaseUrl;
+    private String backendBaseUrl;
     private String returnBaseUrl;
     private String defaultCurrency = "USD";
 
@@ -37,6 +38,8 @@ public class PeachProperties {
     public void setAuthBaseUrl(String authBaseUrl) { this.authBaseUrl = authBaseUrl; }
     public String getCheckoutBaseUrl() { return checkoutBaseUrl; }
     public void setCheckoutBaseUrl(String checkoutBaseUrl) { this.checkoutBaseUrl = checkoutBaseUrl; }
+    public String getBackendBaseUrl() { return backendBaseUrl; }
+    public void setBackendBaseUrl(String backendBaseUrl) { this.backendBaseUrl = backendBaseUrl; }
     public String getReturnBaseUrl() { return returnBaseUrl; }
     public void setReturnBaseUrl(String returnBaseUrl) { this.returnBaseUrl = returnBaseUrl; }
     public String getDefaultCurrency() { return defaultCurrency; }

@@ -101,13 +101,15 @@ app:
     publishable-key: ${STRIPE_PUBLISHABLE_KEY:pk_test_placeholder}
 
   peach:
-    client-id: ${PEACH_CLIENT_ID:}
-    client-secret: ${PEACH_CLIENT_SECRET:}
-    merchant-id: ${PEACH_MERCHANT_ID:}
-    entity-id: ${PEACH_ENTITY_ID:}
+    # SANDBOX credentials — rotate and move to env vars before production go-live
+    client-id: ${PEACH_CLIENT_ID:f0115931dd9ad296ec08a8b1462fa4}
+    client-secret: ${PEACH_CLIENT_SECRET:V9HOFos4UcUeLtA7sK19t9hKg5Z5WKJT8mx7nc6qpnfYEsMHL5npeH/LXGDejQIFu9yMpbMSYIfRucS1rqRqFw==}
+    merchant-id: ${PEACH_MERCHANT_ID:42408e8ac0a64c96b69fc75590e8b50c}
+    entity-id: ${PEACH_ENTITY_ID:8ac7a4c999da82650199df8f31ee09c8}
     auth-base-url: ${PEACH_AUTH_BASE_URL:https://sandbox-dashboard.peachpayments.com}
-    checkout-base-url: ${PEACH_CHECKOUT_BASE_URL:https://sandbox-checkout.peachpayments.com}
-    return-base-url: ${PEACH_RETURN_BASE_URL:http://localhost:3000}
+    checkout-base-url: ${PEACH_CHECKOUT_BASE_URL:https://testsecure.peachpayments.com}
+    backend-base-url: ${PEACH_BACKEND_BASE_URL:https://ambianceholidays.ciadmin.in}
+    return-base-url: ${PEACH_RETURN_BASE_URL:https://ambianceholidays.ciadmin.in}
     default-currency: ${PEACH_DEFAULT_CURRENCY:USD}
 
   rate-limit:
