@@ -388,6 +388,11 @@ public class AuthService {
                     .companyName(agent.getCompanyName())
                     .tier(agent.getTier().name())
                     .status(agent.getStatus().name())
+                    .country(agent.getCountry())
+                    .city(agent.getCity())
+                    .address(agent.getAddress())
+                    .businessType(agent.getBusinessType() != null ? agent.getBusinessType().name() : null)
+                    .phone(user.getPhone())
                     .build();
         }
 

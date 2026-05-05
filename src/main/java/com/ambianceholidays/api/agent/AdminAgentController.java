@@ -2,6 +2,7 @@ package com.ambianceholidays.api.agent;
 
 import com.ambianceholidays.api.agent.dto.AgentResponse;
 import com.ambianceholidays.api.agent.dto.AgentUpdateRequest;
+import com.ambianceholidays.api.notification.NotificationService;
 import com.ambianceholidays.common.dto.ApiResponse;
 import com.ambianceholidays.common.dto.PageMeta;
 import com.ambianceholidays.domain.agent.*;
@@ -30,10 +31,13 @@ public class AdminAgentController {
 
     private final AgentRepository agentRepo;
     private final UserRepository userRepo;
+    private final NotificationService notificationService;
 
-    public AdminAgentController(AgentRepository agentRepo, UserRepository userRepo) {
+    public AdminAgentController(AgentRepository agentRepo, UserRepository userRepo,
+            NotificationService notificationService) {
         this.agentRepo = agentRepo;
         this.userRepo = userRepo;
+        this.notificationService = notificationService;
     }
 
     @GetMapping
@@ -93,7 +97,9 @@ public class AdminAgentController {
         // Activate the associated user account
         agent.getUser().setActive(true);
 
-        return ApiResponse.ok(AgentResponse.from(agentRepo.save(agent)));
+        Agent saved = agentRepo.save(agent);
+        notificationService.sendAgentApproval(saved);
+        return ApiResponse.ok(AgentResponse.from(saved));
     }
 
     @PostMapping("/{id}/suspend")

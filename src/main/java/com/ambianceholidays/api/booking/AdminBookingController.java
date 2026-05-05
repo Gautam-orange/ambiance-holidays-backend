@@ -89,4 +89,17 @@ public class AdminBookingController {
                         "attachment; filename=\"invoice-" + booking.getReference() + ".pdf\"")
                 .body(pdf);
     }
+
+    @GetMapping("/{id}/voucher")
+    @PreAuthorize("hasAnyRole('SUPER_ADMIN','ADMIN_OPS','FLEET_MANAGER')")
+    public ResponseEntity<byte[]> downloadVoucher(@PathVariable UUID id) {
+        Booking booking = bookingRepo.findById(id)
+                .orElseThrow(() -> BusinessException.notFound("Booking"));
+        byte[] pdf = pdfService.generateVoucher(booking);
+        return ResponseEntity.ok()
+                .contentType(MediaType.APPLICATION_PDF)
+                .header(HttpHeaders.CONTENT_DISPOSITION,
+                        "attachment; filename=\"voucher-" + booking.getReference() + ".pdf\"")
+                .body(pdf);
+    }
 }

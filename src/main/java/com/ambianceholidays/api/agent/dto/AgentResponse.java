@@ -1,7 +1,6 @@
 package com.ambianceholidays.api.agent.dto;
 
 import com.ambianceholidays.domain.agent.Agent;
-import com.fasterxml.jackson.annotation.JsonInclude;
 import lombok.Builder;
 import lombok.Getter;
 
@@ -11,13 +10,13 @@ import java.util.UUID;
 
 @Getter
 @Builder
-@JsonInclude(JsonInclude.Include.NON_NULL)
 public class AgentResponse {
 
     private UUID id;
     private String companyName;
     private String country;
     private String city;
+    private String address;
     private String businessType;
     private String tier;
     private String status;
@@ -31,6 +30,7 @@ public class AgentResponse {
     private String firstName;
     private String lastName;
     private String phone;
+    private String whatsapp;
     private Instant createdAt;
 
     public static AgentResponse from(Agent a) {
@@ -39,6 +39,7 @@ public class AgentResponse {
                 .companyName(a.getCompanyName())
                 .country(a.getCountry())
                 .city(a.getCity())
+                .address(a.getAddress())
                 .businessType(a.getBusinessType().name())
                 .tier(a.getTier().name())
                 .status(a.getStatus().name())
@@ -52,6 +53,7 @@ public class AgentResponse {
                 .firstName(a.getUser().getFirstName())
                 .lastName(a.getUser().getLastName())
                 .phone(a.getUser().getPhone())
+                .whatsapp(a.getUser().getWhatsapp())
                 .createdAt(a.getCreatedAt())
                 .build();
     }

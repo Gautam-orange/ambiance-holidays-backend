@@ -33,5 +33,10 @@ public class LoginResponse {
         private final String companyName;
         private final String tier;
         private final String status;
+        private final String country;
+        private final String city;
+        private final String address;
+        private final String businessType;
+        private final String phone;
     }
 }

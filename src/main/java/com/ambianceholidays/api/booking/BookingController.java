@@ -89,4 +89,19 @@ public class BookingController {
                         "attachment; filename=\"invoice-" + booking.getReference() + ".pdf\"")
                 .body(pdf);
     }
+
+    @GetMapping("/{id}/voucher")
+    public ResponseEntity<byte[]> downloadVoucher(@PathVariable UUID id,
+            @AuthenticationPrincipal SecurityPrincipal principal) {
+        var actor = userRepo.findById(principal.getUserId()).orElseThrow();
+        Booking booking = bookingRepo.findById(id)
+                .orElseThrow(() -> BusinessException.notFound("Booking"));
+        bookingService.get(id, actor); // access check
+        byte[] pdf = pdfService.generateVoucher(booking);
+        return ResponseEntity.ok()
+                .contentType(MediaType.APPLICATION_PDF)
+                .header(HttpHeaders.CONTENT_DISPOSITION,
+                        "attachment; filename=\"voucher-" + booking.getReference() + ".pdf\"")
+                .body(pdf);
+    }
 }
