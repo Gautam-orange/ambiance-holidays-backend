@@ -108,19 +108,63 @@ public class PeachCheckoutService {
         String response = getJson(url);
         try {
             JsonNode json = MAPPER.readTree(response);
-            JsonNode result = json.path("result");
-            String code = result.path("code").asText(null);
-            String desc = result.path("description").asText(null);
-            String paymentId = json.path("id").asText(null);
+            String code = findResultCode(json);
+            String desc = findResultDescription(json);
+            String paymentId = firstText(json, "paymentId", "id");
+            log.info("Peach status response for {}: code={} desc={} paymentId={} raw={}",
+                    checkoutId, code, desc, paymentId, response);
             boolean success = isSuccessCode(code);
             boolean pending = !success && isPendingCode(code);
             return new StatusResult(success, pending, code, desc, paymentId, response);
         } catch (Exception e) {
-            log.error("Failed to parse Peach status response: {}", e.getMessage());
+            log.error("Failed to parse Peach status response: {} (raw: {})", e.getMessage(), response);
             throw BusinessException.badRequest("PEACH_STATUS_FAILED",
                     "Invalid Peach Payments status response");
         }
     }
+
+    /** Peach V2 has shipped at least three response shapes for status. Try each. */
+    private static String findResultCode(JsonNode json) {
+        // Shape A: { "result": { "code": "..." } }
+        String c = json.path("result").path("code").asText(null);
+        if (notBlank(c)) return c;
+        // Shape B: nested under "payment"
+        c = json.path("payment").path("result").path("code").asText(null);
+        if (notBlank(c)) return c;
+        // Shape C: array of payments, take the latest entry
+        JsonNode payments = json.path("payments");
+        if (payments.isArray() && payments.size() > 0) {
+            JsonNode last = payments.get(payments.size() - 1);
+            c = last.path("result").path("code").asText(null);
+            if (notBlank(c)) return c;
+            c = last.path("resultCode").asText(null);
+            if (notBlank(c)) return c;
+        }
+        // Shape D: flat resultCode at top level
+        c = json.path("resultCode").asText(null);
+        if (notBlank(c)) return c;
+        return null;
+    }
+
+    private static String findResultDescription(JsonNode json) {
+        String d = json.path("result").path("description").asText(null);
+        if (notBlank(d)) return d;
+        d = json.path("payment").path("result").path("description").asText(null);
+        if (notBlank(d)) return d;
+        JsonNode payments = json.path("payments");
+        if (payments.isArray() && payments.size() > 0) {
+            JsonNode last = payments.get(payments.size() - 1);
+            d = last.path("result").path("description").asText(null);
+            if (notBlank(d)) return d;
+            d = last.path("resultDescription").asText(null);
+            if (notBlank(d)) return d;
+        }
+        d = json.path("resultDescription").asText(null);
+        if (notBlank(d)) return d;
+        return null;
+    }
+
+    private static boolean notBlank(String s) { return s != null && !s.isBlank() && !"null".equalsIgnoreCase(s); }
 
     /** Inspect a Peach result code and return whether it indicates success. */
     public boolean isSuccessCode(String code) {
@@ -218,11 +262,12 @@ public class PeachCheckoutService {
     }
 
     private String originForRequest() {
-        // Prefer the publicly-reachable backend host (set in dev to the
-        // ngrok URL, in prod to the public domain); fallback to the SPA URL.
-        // Property wins over env var so application.yml is the source of truth;
-        // env var is honoured as a fallback for legacy deploys.
-        String configured = props.getBackendBaseUrl();
+        // Peach validates Origin/Referer against the merchant allowlist. Allow an
+        // explicit override (PEACH_ORIGIN_OVERRIDE) so local dev can send the prod
+        // allowlisted domain as Origin while still using a localhost-bound
+        // shopperResultUrl. Falls back to backendBaseUrl, then returnBaseUrl.
+        String override = System.getenv("PEACH_ORIGIN_OVERRIDE");
+        String configured = (override != null && !override.isBlank()) ? override : props.getBackendBaseUrl();
         if (configured == null || configured.isBlank()) {
             configured = System.getenv("PEACH_BACKEND_BASE_URL");
         }

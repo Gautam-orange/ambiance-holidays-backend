@@ -190,6 +190,8 @@ public class PeachPaymentController {
         String pathTail = resourcePath != null ? resourcePath.substring(resourcePath.lastIndexOf('/') + 1) : null;
         String id = params.get("id");
         String checkoutId = firstNonBlank(params.get("checkoutId"), id, pathTail);
+        String redirectResultCode = params.get("result.code");
+        String redirectResultDesc = params.get("result.description");
 
         // Resolve payment by any available identifier — checkoutId first, then merchantTxId.
         Payment payment = null;
@@ -203,14 +205,23 @@ public class PeachPaymentController {
         }
 
         if (payment != null && payment.getStatus() == PaymentStatus.PENDING) {
-            try {
-                PeachCheckoutService.StatusResult result = peach.getStatus(payment.getPeachCheckoutId());
-                applyResult(payment, result.code(), result.description(), result.paymentId(),
-                        result.success(), result.pending());
-            } catch (Exception e) {
-                // Don't break the redirect if the verify call fails — the SPA will poll /status.
-                log.warn("Peach /status verify on return failed for {}: {}",
-                        payment.getPeachCheckoutId(), e.getMessage());
+            // Peach signs the redirect with `signature` query param; the body is therefore
+            // an authoritative source for result.code / result.description. Use it directly.
+            // Only fall back to the status API if Peach didn't supply the codes for some
+            // reason — the API path is also valid but doesn't always return result.* fields.
+            if (redirectResultCode != null && !redirectResultCode.isBlank()) {
+                boolean success = peach.isSuccessCode(redirectResultCode);
+                boolean pending = !success && peach.isPendingCode(redirectResultCode);
+                applyResult(payment, redirectResultCode, redirectResultDesc, id, success, pending);
+            } else {
+                try {
+                    PeachCheckoutService.StatusResult result = peach.getStatus(payment.getPeachCheckoutId());
+                    applyResult(payment, result.code(), result.description(), result.paymentId(),
+                            result.success(), result.pending());
+                } catch (Exception e) {
+                    log.warn("Peach /status fallback on return failed for {}: {}",
+                            payment.getPeachCheckoutId(), e.getMessage());
+                }
             }
         }
 

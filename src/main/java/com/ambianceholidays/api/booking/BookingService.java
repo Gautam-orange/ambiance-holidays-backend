@@ -107,7 +107,8 @@ public class BookingService {
 
         BigDecimal vatRate = getSetting("vat_rate", new BigDecimal("15.00"));
         BigDecimal markupRate = agent != null ? agent.getMarkupPercent() : BigDecimal.ZERO;
-        BigDecimal commissionRate = agent != null ? agent.getCommissionRate() : BigDecimal.ZERO;
+        // Commission removed from invoicing — keep field for schema/back-compat but always zero.
+        BigDecimal commissionRate = BigDecimal.ZERO;
 
         Booking booking = new Booking();
         booking.setReference(generateReference());

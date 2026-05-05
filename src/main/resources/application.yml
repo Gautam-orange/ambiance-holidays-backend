@@ -6,12 +6,9 @@ spring:
     name: ambiance-holidays-api
 
   datasource:
-#    url: ${DB_URL=jdbc:postgresql://192.168.200.34:5432/ambianceholidays}
-#    username: ${DB_USERNAME:ambianceholidays}
-#    password: ${DB_PASSWORD:Sjkbsdf235$$bds&!!}
-    url: jdbc:postgresql://192.168.200.34:5432/ambianceholidays
-    username: ambianceholidays
-    password: "Sjkbsdf235$$bds&!!"
+    url: ${DB_URL:jdbc:postgresql://192.168.200.34:5432/ambianceholidays}
+    username: ${DB_USERNAME:ambianceholidays}
+    password: ${DB_PASSWORD:Sjkbsdf235$$bds&!!}
     driver-class-name: org.postgresql.Driver
     hikari:
       maximum-pool-size: 10

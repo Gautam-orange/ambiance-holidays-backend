@@ -108,7 +108,8 @@ public class CartService {
     private CartSummaryResponse buildSummary(List<CartItem> items, BigDecimal agentMarkupPercent) {
         BigDecimal vatRate = getVatRate();
         BigDecimal markupRate = agentMarkupPercent != null ? agentMarkupPercent : BigDecimal.ZERO;
-        BigDecimal commissionRate = getDefaultCommissionRate();
+        // Commission removed from invoicing — always zero in cart totals.
+        BigDecimal commissionRate = BigDecimal.ZERO;
         int subtotal = items.stream().mapToInt(i -> i.getUnitPriceCents() * i.getQuantity()).sum();
         var result = pricingEngine.calculate(subtotal, markupRate, commissionRate, vatRate);
         return new CartSummaryResponse(

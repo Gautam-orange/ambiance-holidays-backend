@@ -99,4 +99,16 @@ public class AdminTourController {
     public ApiResponse<Void> deleteDayTrip(@PathVariable UUID id) {
         return tourService.deleteDayTrip(id);
     }
+
+    /** Toggle a day-trip's ACTIVE/INACTIVE/ON_REQUEST status without resending the full payload. */
+    @PatchMapping("/day-trips/{id}/status")
+    @PreAuthorize("hasAnyRole('SUPER_ADMIN','ADMIN_OPS','FLEET_MANAGER')")
+    public ApiResponse<DayTripResponse> updateDayTripStatus(@PathVariable UUID id,
+            @RequestBody java.util.Map<String, String> body) {
+        String s = body == null ? null : body.get("status");
+        TourStatus status;
+        try { status = TourStatus.valueOf(s); }
+        catch (Exception e) { throw com.ambianceholidays.exception.BusinessException.badRequest("INVALID_STATUS", "Invalid status: " + s); }
+        return tourService.updateDayTripStatus(id, status);
+    }
 }

@@ -161,6 +161,13 @@ public class TourService {
         return ApiResponse.ok(DayTripResponse.from(d));
     }
 
+    public ApiResponse<DayTripResponse> updateDayTripStatus(UUID id, TourStatus status) {
+        DayTrip d = dayTripRepo.findById(id).orElseThrow(() -> BusinessException.notFound("DayTrip"));
+        d.setStatus(status);
+        dayTripRepo.save(d);
+        return ApiResponse.ok(DayTripResponse.from(d));
+    }
+
     public ApiResponse<Void> deleteDayTrip(UUID id) {
         DayTrip d = dayTripRepo.findById(id).orElseThrow(() -> BusinessException.notFound("DayTrip"));
         d.setDeletedAt(java.time.Instant.now());

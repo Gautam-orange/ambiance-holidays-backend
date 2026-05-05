@@ -8,9 +8,9 @@ import com.ambianceholidays.domain.booking.BookingRepository;
 import com.ambianceholidays.domain.booking.BookingStatus;
 import com.ambianceholidays.domain.car.CarRepository;
 import com.ambianceholidays.domain.car.CarStatus;
+import com.ambianceholidays.domain.tour.DayTripRepository;
 import com.ambianceholidays.domain.tour.TourRepository;
 import com.ambianceholidays.domain.tour.TourStatus;
-import jakarta.persistence.criteria.Predicate;
 import org.springframework.data.jpa.domain.Specification;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -30,13 +30,15 @@ public class AdminDashboardController {
     private final AgentRepository agentRepo;
     private final CarRepository carRepo;
     private final TourRepository tourRepo;
+    private final DayTripRepository dayTripRepo;
 
     public AdminDashboardController(BookingRepository bookingRepo, AgentRepository agentRepo,
-            CarRepository carRepo, TourRepository tourRepo) {
+            CarRepository carRepo, TourRepository tourRepo, DayTripRepository dayTripRepo) {
         this.bookingRepo = bookingRepo;
         this.agentRepo = agentRepo;
         this.carRepo = carRepo;
         this.tourRepo = tourRepo;
+        this.dayTripRepo = dayTripRepo;
     }
 
     @GetMapping
@@ -45,16 +47,17 @@ public class AdminDashboardController {
         Instant now = Instant.now();
         Instant monthStart = now.truncatedTo(ChronoUnit.DAYS).minus(30, ChronoUnit.DAYS);
 
-        // Booking counts
-        long totalBookings = bookingRepo.count();
-        long pendingBookings = countByStatus(BookingStatus.PENDING);
-        long confirmedBookings = countByStatus(BookingStatus.CONFIRMED);
-        long cancelledBookings = countByStatus(BookingStatus.CANCELLED);
-
-        // Revenue
+        // Single read of non-deleted bookings drives every counter / revenue figure below
+        // so they stay consistent (the previous code used unfiltered count() for the total
+        // which silently included soft-deleted rows).
         List<Booking> allBookings = bookingRepo.findAll(
                 (Specification<Booking>) (root, query, cb) ->
                         cb.isNull(root.get("deletedAt")));
+
+        long totalBookings = allBookings.size();
+        long pendingBookings = allBookings.stream().filter(b -> b.getStatus() == BookingStatus.PENDING).count();
+        long confirmedBookings = allBookings.stream().filter(b -> b.getStatus() == BookingStatus.CONFIRMED).count();
+        long cancelledBookings = allBookings.stream().filter(b -> b.getStatus() == BookingStatus.CANCELLED).count();
 
         long revenueTotal = allBookings.stream()
                 .filter(b -> b.getStatus() != BookingStatus.CANCELLED)
@@ -68,7 +71,7 @@ public class AdminDashboardController {
                 .sum();
 
         // Agents
-        long totalAgents = agentRepo.count();
+        long totalAgents = agentRepo.findAll().stream().filter(a -> a.getDeletedAt() == null).count();
         long pendingAgents = agentRepo.countByStatusAndDeletedAtIsNull(AgentStatus.PENDING);
         long activeAgents = agentRepo.countByStatusAndDeletedAtIsNull(AgentStatus.ACTIVE);
 
@@ -77,6 +80,9 @@ public class AdminDashboardController {
                 .filter(c -> c.getDeletedAt() == null && c.getStatus() == CarStatus.ACTIVE)
                 .count();
         long activeTours = tourRepo.findAll().stream()
+                .filter(t -> t.getDeletedAt() == null && t.getStatus() == TourStatus.ACTIVE)
+                .count();
+        long activeDayTrips = dayTripRepo.findAll().stream()
                 .filter(t -> t.getDeletedAt() == null && t.getStatus() == TourStatus.ACTIVE)
                 .count();
 
@@ -95,14 +101,8 @@ public class AdminDashboardController {
                         "active", activeAgents),
                 "assets", Map.of(
                         "activeCars", activeCars,
-                        "activeTours", activeTours)));
+                        "activeTours", activeTours,
+                        "activeDayTrips", activeDayTrips)));
     }
 
-    private long countByStatus(BookingStatus status) {
-        return bookingRepo.count((Specification<Booking>) (root, query, cb) -> {
-            Predicate notDeleted = cb.isNull(root.get("deletedAt"));
-            Predicate byStatus = cb.equal(root.get("status"), status);
-            return cb.and(notDeleted, byStatus);
-        });
-    }
 }

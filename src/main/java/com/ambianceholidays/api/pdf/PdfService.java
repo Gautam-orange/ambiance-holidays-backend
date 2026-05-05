@@ -2,6 +2,9 @@ package com.ambianceholidays.api.pdf;
 
 import com.ambianceholidays.domain.booking.Booking;
 import com.ambianceholidays.domain.booking.BookingItem;
+import com.ambianceholidays.domain.payment.Payment;
+import com.ambianceholidays.domain.payment.PaymentRepository;
+import com.ambianceholidays.domain.payment.PaymentStatus;
 import com.lowagie.text.*;
 import com.lowagie.text.pdf.PdfPCell;
 import com.lowagie.text.pdf.PdfPTable;
@@ -13,9 +16,16 @@ import java.awt.Color;
 import java.io.ByteArrayOutputStream;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
+import java.util.Comparator;
 
 @Service
 public class PdfService {
+
+    private final PaymentRepository paymentRepository;
+
+    public PdfService(PaymentRepository paymentRepository) {
+        this.paymentRepository = paymentRepository;
+    }
 
     private static final Font TITLE_FONT = new Font(Font.HELVETICA, 20, Font.BOLD, new Color(15, 23, 42));
     private static final Font HEADER_FONT = new Font(Font.HELVETICA, 10, Font.BOLD, new Color(71, 85, 105));
@@ -25,6 +35,22 @@ public class PdfService {
     private static final Color LIGHT_BG = new Color(248, 250, 252);
 
     public byte[] generateInvoice(Booking booking) {
+        // Resolve invoice currency from the booking's most-recent successful payment so
+        // the invoice always matches the amount actually charged. Fall back to the most
+        // recent payment record (any status), then to the property default.
+        String invoiceCurrency = paymentRepository.findByBookingId(booking.getId()).stream()
+                .filter(p -> p.getStatus() == PaymentStatus.SUCCEEDED)
+                .max(Comparator.comparing(Payment::getCreatedAt, Comparator.nullsFirst(Comparator.naturalOrder())))
+                .map(Payment::getCurrency)
+                .orElseGet(() -> paymentRepository.findByBookingId(booking.getId()).stream()
+                        .max(Comparator.comparing(Payment::getCreatedAt, Comparator.nullsFirst(Comparator.naturalOrder())))
+                        .map(Payment::getCurrency)
+                        .orElse("USD"));
+        return generateInvoice(booking, invoiceCurrency);
+    }
+
+    public byte[] generateInvoice(Booking booking, String currency) {
+        final String currencyCode = currency != null && !currency.isBlank() ? currency.toUpperCase() : "USD";
         try (ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
             Document doc = new Document(PageSize.A4, 50, 50, 50, 50);
             PdfWriter.getInstance(doc, baos);
@@ -83,8 +109,8 @@ public class PdfService {
             for (BookingItem item : booking.getItems()) {
                 addTableCell(table, item.getItemType().name().replace("_", " "));
                 addTableCell(table, String.valueOf(item.getQuantity()));
-                addTableCell(table, formatMoney(item.getUnitPriceCents()));
-                addTableCell(table, formatMoney(item.getTotalCents()));
+                addTableCell(table, formatMoney(item.getUnitPriceCents(), currencyCode));
+                addTableCell(table, formatMoney(item.getTotalCents(), currencyCode));
             }
             doc.add(table);
 
@@ -95,17 +121,15 @@ public class PdfService {
             totals.setHorizontalAlignment(Element.ALIGN_RIGHT);
             totals.setSpacingBefore(8);
 
-            addTotalRow(totals, "Subtotal", formatMoney(booking.getSubtotalCents()));
+            addTotalRow(totals, "Subtotal", formatMoney(booking.getSubtotalCents(), currencyCode));
             if (booking.getMarkupCents() > 0)
-                addTotalRow(totals, "Markup (" + booking.getMarkupRate() + "%)", formatMoney(booking.getMarkupCents()));
-            if (booking.getCommissionCents() > 0)
-                addTotalRow(totals, "Commission (" + booking.getCommissionRate() + "%)", formatMoney(booking.getCommissionCents()));
-            addTotalRow(totals, "VAT (" + booking.getVatRate() + "%)", formatMoney(booking.getVatCents()));
+                addTotalRow(totals, "Markup (" + booking.getMarkupRate() + "%)", formatMoney(booking.getMarkupCents(), currencyCode));
+            addTotalRow(totals, "VAT (" + booking.getVatRate() + "%)", formatMoney(booking.getVatCents(), currencyCode));
 
-            PdfPCell totalLabel = new PdfPCell(new Phrase("TOTAL DUE", new Font(Font.HELVETICA, 10, Font.BOLD)));
+            PdfPCell totalLabel = new PdfPCell(new Phrase("TOTAL DUE (" + currencyCode + ")", new Font(Font.HELVETICA, 10, Font.BOLD)));
             totalLabel.setBorder(Rectangle.TOP);
             totalLabel.setPadding(6);
-            PdfPCell totalValue = new PdfPCell(new Phrase(formatMoney(booking.getTotalCents()),
+            PdfPCell totalValue = new PdfPCell(new Phrase(formatMoney(booking.getTotalCents(), currencyCode),
                     new Font(Font.HELVETICA, 10, Font.BOLD, BRAND_COLOR)));
             totalValue.setBorder(Rectangle.TOP);
             totalValue.setPadding(6);
@@ -174,7 +198,15 @@ public class PdfService {
         table.addCell(valueCell);
     }
 
-    private String formatMoney(int cents) {
-        return String.format("Rs %,.0f", cents / 100.0);
+    private String formatMoney(int cents, String currencyCode) {
+        String symbol = switch (currencyCode == null ? "USD" : currencyCode.toUpperCase()) {
+            case "USD" -> "$";
+            case "EUR" -> "€";
+            case "GBP" -> "£";
+            case "INR" -> "₹";
+            case "MUR" -> "Rs ";
+            default    -> currencyCode + " ";
+        };
+        return String.format("%s%,.2f", symbol, cents / 100.0);
     }
 }
