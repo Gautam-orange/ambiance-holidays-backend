@@ -310,6 +310,23 @@ public class CartService {
                 int adults   = options != null && options.get("paxAdults")   instanceof Number n ? n.intValue() : 1;
                 int children = options != null && options.get("paxChildren") instanceof Number n ? n.intValue() : 0;
                 int infants  = options != null && options.get("paxInfants")  instanceof Number n ? n.intValue() : 0;
+                // Adults + children consume tour capacity. Infants ride free on a parent's
+                // lap and don't count toward maxPax. minPax is the per-tour business floor.
+                int seatedPax = adults + children;
+                if (adults < 1) {
+                    throw BusinessException.badRequest("INVALID_PAX",
+                            "Number of adults must be at least 1.");
+                }
+                if (seatedPax < tour.getMinPax()) {
+                    throw BusinessException.badRequest("PAX_BELOW_MIN",
+                            tour.getTitle() + " requires at least " + tour.getMinPax()
+                                    + " guest" + (tour.getMinPax() == 1 ? "" : "s") + ".");
+                }
+                if (seatedPax > tour.getMaxPax()) {
+                    throw BusinessException.badRequest("PAX_OVER_MAX",
+                            tour.getTitle() + " can host at most " + tour.getMaxPax()
+                                    + " guest" + (tour.getMaxPax() == 1 ? "" : "s") + ".");
+                }
                 yield (tour.getAdultPriceCents() * adults)
                     + (tour.getChildPriceCents() * children)
                     + (tour.getInfantPriceCents() * infants);
@@ -321,6 +338,15 @@ public class CartService {
                     throw BusinessException.badRequest("PRODUCT_INACTIVE", "Day trip is not available for booking");
                 int adults   = options != null && options.get("paxAdults")   instanceof Number n ? n.intValue() : 1;
                 int children = options != null && options.get("paxChildren") instanceof Number n ? n.intValue() : 0;
+                if (adults < 1) {
+                    throw BusinessException.badRequest("INVALID_PAX",
+                            "Number of adults must be at least 1.");
+                }
+                if (trip.getMaxPax() != null && (adults + children) > trip.getMaxPax()) {
+                    throw BusinessException.badRequest("PAX_OVER_MAX",
+                            trip.getTitle() + " can host at most " + trip.getMaxPax()
+                                    + " guest" + (trip.getMaxPax() == 1 ? "" : "s") + ".");
+                }
                 int childPrice = trip.getChildPriceCents() > 0 ? trip.getChildPriceCents() : trip.getAdultPriceCents();
                 yield (trip.getAdultPriceCents() * adults) + (childPrice * children);
             }
