@@ -36,6 +36,38 @@ public class AdminBookingController {
         this.userRepo = userRepo;
     }
 
+    @GetMapping("/export")
+    @PreAuthorize("hasAnyRole('SUPER_ADMIN','ADMIN_OPS','FLEET_MANAGER')")
+    public ResponseEntity<byte[]> exportCsv(
+            @RequestParam(defaultValue = "csv") String format) {
+        // Pull a generous page size — we want every booking. The list service
+        // is paginated; ask for a large window. (If usage outgrows this we'll
+        // stream.)
+        var rows = bookingService.list(null, null, null, null, null, null, 0, 1000, null).getData();
+        StringBuilder sb = new StringBuilder("Reference,Status,Customer,Email,Phone,Service Date,Total (cents),Agent,Created\n");
+        for (BookingResponse b : rows) {
+            sb.append('"').append(b.reference() == null ? "" : b.reference()).append("\",")
+              .append(b.status() != null ? b.status().name() : "").append(',')
+              .append('"').append(safe(b.customerName())).append("\",")
+              .append('"').append(safe(b.customerEmail())).append("\",")
+              .append('"').append(safe(b.customerPhone())).append("\",")
+              .append(b.serviceDate() != null ? b.serviceDate().toString() : "").append(',')
+              .append(b.totalCents()).append(',')
+              .append('"').append(safe(b.agentName())).append("\",")
+              .append(b.createdAt() != null ? b.createdAt().toString() : "")
+              .append('\n');
+        }
+        byte[] bytes = sb.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        return ResponseEntity.ok()
+                .contentType(MediaType.parseMediaType("text/csv;charset=UTF-8"))
+                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"bookings.csv\"")
+                .body(bytes);
+    }
+
+    private static String safe(String s) {
+        return s == null ? "" : s.replace("\"", "\"\"");
+    }
+
     @GetMapping
     @PreAuthorize("hasAnyRole('SUPER_ADMIN','ADMIN_OPS','FLEET_MANAGER')")
     public ApiResponse<List<BookingResponse>> list(

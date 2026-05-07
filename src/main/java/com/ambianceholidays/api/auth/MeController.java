@@ -11,13 +11,17 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
-@RequestMapping("/me")
 @RequiredArgsConstructor
 public class MeController {
 
     private final AuthService authService;
 
-    @GetMapping
+    /**
+     * Mounted at both `/auth/me` (the canonical path the SPA uses) and `/me`
+     * (what the controller used to expose) so existing integrations keep
+     * working. Either lands on the same handler.
+     */
+    @GetMapping({"/auth/me", "/me"})
     public ResponseEntity<ApiResponse<LoginResponse.UserInfo>> me(
             @AuthenticationPrincipal SecurityPrincipal principal) {
         LoginResponse.UserInfo user = authService.getCurrentUser(principal.getUserId());
