@@ -6,7 +6,10 @@ import org.hibernate.type.SqlTypes;
 import org.hibernate.annotations.JdbcTypeCode;
 import com.ambianceholidays.domain.supplier.Supplier;
 
+import java.math.BigDecimal;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.UUID;
 
 @Entity
@@ -52,6 +55,15 @@ public class DayTrip {
     @Column(name = "child_price_cents", nullable = false)
     private int childPriceCents;
 
+    @Column(name = "price_per_vehicle_cents", nullable = false)
+    private int pricePerVehicleCents = 0;
+
+    @Column(name = "net_rate_per_pax_cents", nullable = false)
+    private int netRatePerPaxCents = 0;
+
+    @Column(name = "markup_pct", nullable = false, precision = 5, scale = 2)
+    private BigDecimal markupPct = BigDecimal.ZERO;
+
     @Column(name = "max_pax")
     private Short maxPax;
 
@@ -67,6 +79,14 @@ public class DayTrip {
     @Column(name = "gallery_urls", columnDefinition = "TEXT[]")
     private String[] galleryUrls;
 
+    /** NATURE / ADVENTURE / CULTURAL / SEA_ACTIVITIES / BEACH — see V3 chk constraint. */
+    @Column(length = 30)
+    private String theme;
+
+    /** "always" or "on_request" — separate from status to allow ACTIVE+on_request. */
+    @Column(name = "availability_mode", length = 20, nullable = false)
+    private String availabilityMode = "always";
+
     @Enumerated(EnumType.STRING)
     @JdbcTypeCode(SqlTypes.NAMED_ENUM)
     @Column(nullable = false)
@@ -80,6 +100,18 @@ public class DayTrip {
 
     @Column(name = "deleted_at")
     private Instant deletedAt;
+
+    @OneToMany(mappedBy = "dayTrip", cascade = CascadeType.ALL, orphanRemoval = true)
+    @OrderBy("stopOrder ASC")
+    private List<DayTripItineraryStop> itineraryStops = new ArrayList<>();
+
+    @OneToMany(mappedBy = "dayTrip", cascade = CascadeType.ALL, orphanRemoval = true)
+    @OrderBy("sortOrder ASC")
+    private List<DayTripPickupZone> pickupZones = new ArrayList<>();
+
+    @OneToMany(mappedBy = "dayTrip", cascade = CascadeType.ALL, orphanRemoval = true)
+    @OrderBy("displayOrder ASC")
+    private List<DayTripHighlight> highlights = new ArrayList<>();
 
     @PreUpdate
     void onUpdate() { updatedAt = Instant.now(); }
@@ -103,6 +135,12 @@ public class DayTrip {
     public void setAdultPriceCents(int adultPriceCents) { this.adultPriceCents = adultPriceCents; }
     public int getChildPriceCents() { return childPriceCents; }
     public void setChildPriceCents(int childPriceCents) { this.childPriceCents = childPriceCents; }
+    public int getPricePerVehicleCents() { return pricePerVehicleCents; }
+    public void setPricePerVehicleCents(int pricePerVehicleCents) { this.pricePerVehicleCents = pricePerVehicleCents; }
+    public int getNetRatePerPaxCents() { return netRatePerPaxCents; }
+    public void setNetRatePerPaxCents(int netRatePerPaxCents) { this.netRatePerPaxCents = netRatePerPaxCents; }
+    public BigDecimal getMarkupPct() { return markupPct; }
+    public void setMarkupPct(BigDecimal markupPct) { this.markupPct = markupPct == null ? BigDecimal.ZERO : markupPct; }
     public Short getMaxPax() { return maxPax; }
     public void setMaxPax(Short maxPax) { this.maxPax = maxPax; }
     public String[] getIncludes() { return includes; }
@@ -113,10 +151,19 @@ public class DayTrip {
     public void setCoverImageUrl(String coverImageUrl) { this.coverImageUrl = coverImageUrl; }
     public String[] getGalleryUrls() { return galleryUrls; }
     public void setGalleryUrls(String[] galleryUrls) { this.galleryUrls = galleryUrls; }
+    public String getTheme() { return theme; }
+    public void setTheme(String theme) { this.theme = theme; }
+    public String getAvailabilityMode() { return availabilityMode; }
+    public void setAvailabilityMode(String availabilityMode) {
+        this.availabilityMode = (availabilityMode == null || availabilityMode.isBlank()) ? "always" : availabilityMode;
+    }
     public TourStatus getStatus() { return status; }
     public void setStatus(TourStatus status) { this.status = status; }
     public Instant getCreatedAt() { return createdAt; }
     public Instant getUpdatedAt() { return updatedAt; }
     public Instant getDeletedAt() { return deletedAt; }
     public void setDeletedAt(Instant deletedAt) { this.deletedAt = deletedAt; }
+    public List<DayTripItineraryStop> getItineraryStops() { return itineraryStops; }
+    public List<DayTripPickupZone> getPickupZones() { return pickupZones; }
+    public List<DayTripHighlight> getHighlights() { return highlights; }
 }

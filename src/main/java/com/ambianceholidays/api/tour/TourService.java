@@ -183,14 +183,65 @@ public class TourService {
         d.setDuration(req.duration());
         d.setAdultPriceCents(req.adultPriceCents());
         d.setChildPriceCents(req.childPriceCents());
+        if (req.pricePerVehicleCents() != null) d.setPricePerVehicleCents(req.pricePerVehicleCents());
+        if (req.netRatePerPaxCents() != null)   d.setNetRatePerPaxCents(req.netRatePerPaxCents());
+        if (req.markupPct() != null)            d.setMarkupPct(req.markupPct());
         d.setMaxPax(req.maxPax());
         d.setIncludes(req.includes());
         d.setExcludes(req.excludes());
         d.setCoverImageUrl(req.coverImageUrl());
         d.setGalleryUrls(req.galleryUrls());
+        d.setTheme(req.theme());
+        d.setAvailabilityMode(req.availabilityMode());
         if (req.status() != null) d.setStatus(req.status());
         if (req.supplierId() != null) {
             supplierRepo.findById(req.supplierId()).ifPresent(d::setSupplier);
+        }
+
+        // Child collections — replace-in-place via orphanRemoval cascade.
+        d.getHighlights().clear();
+        if (req.highlights() != null) {
+            short order = 0;
+            for (var h : req.highlights()) {
+                DayTripHighlight x = new DayTripHighlight();
+                x.setDayTrip(d);
+                x.setText(h.text());
+                x.setDisplayOrder(h.displayOrder() != null ? h.displayOrder() : order);
+                d.getHighlights().add(x);
+                order++;
+            }
+        }
+
+        d.getItineraryStops().clear();
+        if (req.itineraryStops() != null) {
+            short order = 0;
+            for (var s : req.itineraryStops()) {
+                DayTripItineraryStop x = new DayTripItineraryStop();
+                x.setDayTrip(d);
+                x.setStopOrder(s.stopOrder() != null ? s.stopOrder() : order);
+                x.setTitle(s.title());
+                x.setTimeLabel(s.timeLabel());
+                x.setLocation(s.location());
+                x.setDescription(s.description());
+                d.getItineraryStops().add(x);
+                order++;
+            }
+        }
+
+        d.getPickupZones().clear();
+        if (req.pickupZones() != null) {
+            short order = 0;
+            for (var z : req.pickupZones()) {
+                DayTripPickupZone x = new DayTripPickupZone();
+                x.setDayTrip(d);
+                x.setZoneName(z.zoneName());
+                x.setHotelName(z.hotelName());
+                x.setPickupFrom(z.pickupFrom());
+                x.setPickupTo(z.pickupTo());
+                x.setSortOrder(z.sortOrder() != null ? z.sortOrder() : order);
+                d.getPickupZones().add(x);
+                order++;
+            }
         }
     }
 
