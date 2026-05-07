@@ -60,7 +60,10 @@ public class SecurityConfig {
                 .requestMatchers("/payments/peach/**").permitAll()
                 // Booking read/manage requires auth
                 .requestMatchers("/bookings/**").hasAnyRole("SUPER_ADMIN", "ADMIN_OPS", "B2B_AGENT")
-                // Upload requires admin
+                // Static file serving for stored uploads is public so customer browsers can render
+                // car / tour cover images. Admin-only endpoints (presign, image upload) keep their
+                // own @PreAuthorize and stay restricted.
+                .requestMatchers(HttpMethod.GET, "/uploads/files/**").permitAll()
                 .requestMatchers("/uploads/**").hasAnyRole("SUPER_ADMIN", "ADMIN_OPS", "FLEET_MANAGER")
                 // Everything else requires authentication
                 .anyRequest().authenticated()

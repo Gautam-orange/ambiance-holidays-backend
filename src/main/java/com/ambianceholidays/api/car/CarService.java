@@ -290,23 +290,25 @@ public class CarService {
                 || request.getUsageType() == CarUsageType.BOTH;
 
         // Per-row checks
-        if (rates != null) {
-            for (int i = 0; i < rates.size(); i++) {
-                CarRateRequest r = rates.get(i);
-                if (r.getAmountCents() == null || r.getAmountCents() < 0) {
+        if (rates == null || rates.isEmpty()) {
+            throw BusinessException.badRequest("MISSING_RATES",
+                    "At least one rate with a non-zero price is required.");
+        }
+        for (int i = 0; i < rates.size(); i++) {
+            CarRateRequest r = rates.get(i);
+            if (r.getAmountCents() == null || r.getAmountCents() <= 0) {
+                throw BusinessException.badRequest("INVALID_RATE",
+                        "Rate row " + (i + 1) + ": price must be greater than zero.");
+            }
+            if (r.getPeriod() == RatePeriod.PER_KM) {
+                int from = r.getKmFrom() != null ? r.getKmFrom() : 0;
+                if (from < 0) {
                     throw BusinessException.badRequest("INVALID_RATE",
-                            "Rate row " + (i + 1) + ": price must be a non-negative number.");
+                            "Transfer band " + (i + 1) + ": From-km cannot be negative.");
                 }
-                if (r.getPeriod() == RatePeriod.PER_KM) {
-                    int from = r.getKmFrom() != null ? r.getKmFrom() : 0;
-                    if (from < 0) {
-                        throw BusinessException.badRequest("INVALID_RATE",
-                                "Transfer band " + (i + 1) + ": From-km cannot be negative.");
-                    }
-                    if (r.getKmTo() != null && r.getKmTo() <= from) {
-                        throw BusinessException.badRequest("INVALID_RATE",
-                                "Transfer band " + (i + 1) + ": To-km must be greater than From-km.");
-                    }
+                if (r.getKmTo() != null && r.getKmTo() <= from) {
+                    throw BusinessException.badRequest("INVALID_RATE",
+                            "Transfer band " + (i + 1) + ": To-km must be greater than From-km.");
                 }
             }
         }

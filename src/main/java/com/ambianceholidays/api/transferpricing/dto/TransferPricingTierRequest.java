@@ -10,7 +10,7 @@ public record TransferPricingTierRequest(
         @NotBlank String label,
         @NotNull @Min(0) Integer minKm,
         Integer maxKm,          // null = unlimited
-        @NotNull @Min(0) Integer priceCents,
+        @NotNull @Min(value = 1, message = "Price must be greater than zero") Integer priceCents,
         boolean active,
         short sortOrder,
         // What's Included / Excluded — bullet lists shown on the customer-facing

@@ -110,6 +110,42 @@ public class AdminAgentController {
                 .orElseThrow(() -> BusinessException.notFound("Agent"));
 
         agent.setStatus(AgentStatus.SUSPENDED);
+        // Lock out the underlying user so future logins are denied while suspended.
+        if (agent.getUser() != null) agent.getUser().setActive(false);
+        return ApiResponse.ok(AgentResponse.from(agentRepo.save(agent)));
+    }
+
+    @PostMapping("/{id}/reactivate")
+    @PreAuthorize("hasRole('SUPER_ADMIN')")
+    public ApiResponse<AgentResponse> reactivate(@PathVariable UUID id) {
+        Agent agent = agentRepo.findById(id)
+                .filter(a -> a.getDeletedAt() == null)
+                .orElseThrow(() -> BusinessException.notFound("Agent"));
+
+        if (agent.getStatus() == AgentStatus.ACTIVE) {
+            throw BusinessException.conflict("ALREADY_ACTIVE", "Agent is already active");
+        }
+
+        agent.setStatus(AgentStatus.ACTIVE);
+        if (agent.getUser() != null) agent.getUser().setActive(true);
+        return ApiResponse.ok(AgentResponse.from(agentRepo.save(agent)));
+    }
+
+    @PostMapping("/{id}/reject")
+    @PreAuthorize("hasRole('SUPER_ADMIN')")
+    public ApiResponse<AgentResponse> reject(@PathVariable UUID id,
+            @RequestBody(required = false) java.util.Map<String, String> body) {
+        Agent agent = agentRepo.findById(id)
+                .filter(a -> a.getDeletedAt() == null)
+                .orElseThrow(() -> BusinessException.notFound("Agent"));
+
+        if (agent.getStatus() != AgentStatus.PENDING) {
+            throw BusinessException.badRequest("INVALID_STATE", "Only pending agents can be rejected");
+        }
+
+        agent.setStatus(AgentStatus.SUSPENDED);
+        if (agent.getUser() != null) agent.getUser().setActive(false);
+        // We could persist the rejection reason on a dedicated column if needed.
         return ApiResponse.ok(AgentResponse.from(agentRepo.save(agent)));
     }
 

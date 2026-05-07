@@ -3,7 +3,9 @@ package com.ambianceholidays.storage;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Service;
+import software.amazon.awssdk.core.sync.RequestBody;
 import software.amazon.awssdk.regions.Region;
+import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.model.PutObjectRequest;
 import software.amazon.awssdk.services.s3.presigner.S3Presigner;
 import software.amazon.awssdk.services.s3.presigner.model.PresignedPutObjectRequest;
@@ -55,6 +57,25 @@ public class S3StorageService implements StorageService {
                     : endpoint + "/" + bucket + "/" + fullKey;
 
             return new PresignResult(presigned.url().toString(), objectUrl, fullKey);
+        }
+    }
+
+    @Override
+    public String uploadBytes(String key, String contentType, byte[] bytes) {
+        var builder = S3Client.builder().region(Region.of(region));
+        if (!endpoint.isBlank()) {
+            builder.endpointOverride(URI.create(endpoint));
+        }
+        try (S3Client s3 = builder.build()) {
+            PutObjectRequest req = PutObjectRequest.builder()
+                    .bucket(bucket)
+                    .key(key)
+                    .contentType(contentType)
+                    .build();
+            s3.putObject(req, RequestBody.fromBytes(bytes));
+            return endpoint.isBlank()
+                    ? "https://" + bucket + ".s3." + region + ".amazonaws.com/" + key
+                    : endpoint + "/" + bucket + "/" + key;
         }
     }
 

@@ -18,6 +18,9 @@ public record BookingResponse(
         String customerName,
         String customerEmail,
         String customerPhone,
+        String customerWhatsapp,
+        String customerNationality,
+        String customerAddress,
         String agentName,
         UUID agentId,
         String createdByName,
@@ -47,14 +50,16 @@ public record BookingResponse(
     }
 
     public static BookingResponse from(Booking b, Payment p) {
-        String customerName = b.getCustomer().getFullName();
-        String customerPhone = b.getCustomer().getPhone();
+        var c = b.getCustomer();
+        String customerName = c.getFullName();
+        String customerPhone = c.getPhone();
         String agentName = b.getAgent() != null ? b.getAgent().getCompanyName() : null;
         UUID agentId = b.getAgent() != null ? b.getAgent().getId() : null;
         String createdByName = b.getCreatedBy() != null ? b.getCreatedBy().getFullName() : null;
         return new BookingResponse(
                 b.getId(), b.getReference(), b.getStatus(),
-                customerName, b.getCustomer().getEmail(), customerPhone,
+                customerName, c.getEmail(), customerPhone,
+                c.getWhatsapp(), c.getNationality(), c.getAddress(),
                 agentName, agentId, createdByName,
                 b.isEnquiry(), b.getCancelledByType(),
                 b.getServiceDate(),

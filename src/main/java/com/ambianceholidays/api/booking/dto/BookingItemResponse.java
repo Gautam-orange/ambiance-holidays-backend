@@ -25,6 +25,7 @@ public record BookingItemResponse(
         short paxInfants,
         String notes,
         Short rentalDays,
+        List<String> stops,
         List<ExtraResponse> extras
 ) {
     public record ExtraResponse(UUID id, String label, short quantity, int unitPriceCents, int totalCents) {}
@@ -36,6 +37,7 @@ public record BookingItemResponse(
                 item.getStartAt(), item.getEndAt(), item.getPickupLocation(), item.getDropoffLocation(),
                 item.getPaxAdults(), item.getPaxChildren(), item.getPaxInfants(),
                 item.getNotes(), item.getRentalDays(),
+                item.getStops() != null ? List.of(item.getStops()) : List.of(),
                 item.getExtras().stream().map(e -> new ExtraResponse(
                         e.getId(), e.getLabel(), e.getQuantity(), e.getUnitPriceCents(), e.getTotalCents())).toList()
         );

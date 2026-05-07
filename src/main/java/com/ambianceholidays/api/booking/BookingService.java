@@ -42,11 +42,13 @@ public class BookingService {
     private final PricingEngine pricingEngine;
     private final CartService cartService;
     private final NotificationService notificationService;
+    private final com.ambianceholidays.domain.car.CarRepository carRepo;
 
     public BookingService(BookingRepository bookingRepo, CustomerRepository customerRepo,
             AgentRepository agentRepo, PaymentRepository paymentRepo,
             SystemSettingRepository settingRepo, PricingEngine pricingEngine,
-            CartService cartService, NotificationService notificationService) {
+            CartService cartService, NotificationService notificationService,
+            com.ambianceholidays.domain.car.CarRepository carRepo) {
         this.bookingRepo = bookingRepo;
         this.customerRepo = customerRepo;
         this.agentRepo = agentRepo;
@@ -55,6 +57,7 @@ public class BookingService {
         this.pricingEngine = pricingEngine;
         this.cartService = cartService;
         this.notificationService = notificationService;
+        this.carRepo = carRepo;
     }
 
     // ── Checkout ─────────────────────────────────────────────────────────────
@@ -71,6 +74,16 @@ public class BookingService {
      * Used by the payment-required flow (Peach) so we can hold the booking while the user pays.
      */
     public Booking createPendingBooking(String sessionKey, CheckoutRequest req, User actor) {
+        // Fail fast on a suspended / pending agent BEFORE we look at their cart
+        // — otherwise the empty-cart message obscures the real reason.
+        if (actor != null && actor.getRole().name().equals("B2B_AGENT")) {
+            Agent ag = agentRepo.findByUserIdAndDeletedAtIsNull(actor.getId()).orElse(null);
+            if (ag != null && ag.getStatus() != com.ambianceholidays.domain.agent.AgentStatus.ACTIVE) {
+                throw BusinessException.forbidden("Agent account is " + ag.getStatus().name().toLowerCase()
+                        + " and cannot create bookings");
+            }
+        }
+
         List<CartItem> cartItems = cartService.getActiveItems(sessionKey);
         if (cartItems.isEmpty()) throw BusinessException.badRequest("EMPTY_CART", "Cart is empty");
 
@@ -99,10 +112,15 @@ public class BookingService {
                     return customerRepo.save(c);
                 });
 
-        // Resolve agent (if actor has B2B_AGENT role)
+        // Resolve agent (if actor has B2B_AGENT role). Suspended/pending agents
+        // can't create bookings — short-circuit before we mutate any state.
         Agent agent = null;
         if (actor != null && actor.getRole().name().equals("B2B_AGENT")) {
             agent = agentRepo.findByUserIdAndDeletedAtIsNull(actor.getId()).orElse(null);
+            if (agent != null && agent.getStatus() != com.ambianceholidays.domain.agent.AgentStatus.ACTIVE) {
+                throw BusinessException.forbidden("Agent account is " + agent.getStatus().name().toLowerCase()
+                        + " and cannot create bookings");
+            }
         }
 
         BigDecimal vatRate = getSetting("vat_rate", new BigDecimal("15.00"));
@@ -123,6 +141,20 @@ public class BookingService {
 
         int subtotal = 0;
         for (CartItem ci : cartItems) {
+            // Reject any car (rental or transfer) that's been disabled or
+            // soft-deleted between add-to-cart and checkout. Otherwise the
+            // booking lands and admin has to clean it up after the fact.
+            if (ci.getItemType() == com.ambianceholidays.domain.booking.BookingItemType.CAR_RENTAL
+                    || ci.getItemType() == com.ambianceholidays.domain.booking.BookingItemType.CAR_TRANSFER) {
+                var car = carRepo.findById(ci.getRefId())
+                        .orElseThrow(() -> BusinessException.badRequest("CAR_UNAVAILABLE",
+                                "A vehicle in your cart is no longer available"));
+                if (car.getDeletedAt() != null
+                        || car.getStatus() != com.ambianceholidays.domain.car.CarStatus.ACTIVE) {
+                    throw BusinessException.badRequest("CAR_UNAVAILABLE",
+                            "Vehicle '" + car.getName() + "' is currently unavailable. Please remove it from your cart.");
+                }
+            }
             BookingItem item = new BookingItem();
             item.setBooking(booking);
             item.setItemType(ci.getItemType());
@@ -228,8 +260,10 @@ public class BookingService {
             throw BusinessException.badRequest("PAST_SERVICE_DATE", "Cannot cancel a booking whose service date has passed");
         checkAccess(b, actor);
 
-        long hoursUntil = ChronoUnit.HOURS.between(Instant.now(),
-                b.getServiceDate().atStartOfDay().toInstant(ZoneOffset.UTC));
+        long hoursUntil = b.getServiceDate() != null
+                ? ChronoUnit.HOURS.between(Instant.now(),
+                        b.getServiceDate().atStartOfDay().toInstant(ZoneOffset.UTC))
+                : Long.MAX_VALUE; // unknown service date — treat as far-out, zero cancellation fee.
         int fee = pricingEngine.cancellationFee(b.getTotalCents(), Math.max(0, hoursUntil));
 
         b.setStatus(BookingStatus.CANCELLED);
@@ -358,6 +392,14 @@ public class BookingService {
         // Frontend sends rentalDays as a number
         if (opts.get("rentalDays") instanceof Number n) item.setRentalDays(n.shortValue());
         if (opts.get("notes") instanceof String s) item.setNotes(s);
+        // Multi-trip stops list. Frontend sends `stops: string[]` for MULTI_TRIP transfers.
+        if (opts.get("stops") instanceof List<?> stopList) {
+            String[] stops = stopList.stream()
+                    .filter(s -> s instanceof String && !((String) s).isBlank())
+                    .map(Object::toString)
+                    .toArray(String[]::new);
+            if (stops.length > 0) item.setStops(stops);
+        }
         // Trip type for transfers
         if (opts.get("tripType") instanceof String s) {
             try {

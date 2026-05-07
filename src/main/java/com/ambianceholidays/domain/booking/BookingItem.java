@@ -75,6 +75,14 @@ public class BookingItem {
     @Column(name = "rental_days")
     private Short rentalDays;
 
+    /**
+     * Multi-trip transfers carry an ordered list of intermediate stops between the
+     * pickup and the final drop-off. Stored as a Postgres TEXT[].
+     */
+    @org.hibernate.annotations.JdbcTypeCode(org.hibernate.type.SqlTypes.ARRAY)
+    @Column(name = "stops", columnDefinition = "text[]")
+    private String[] stops;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt = Instant.now();
 
@@ -116,6 +124,8 @@ public class BookingItem {
     public void setTripType(TransferTripType tripType) { this.tripType = tripType; }
     public Short getRentalDays() { return rentalDays; }
     public void setRentalDays(Short rentalDays) { this.rentalDays = rentalDays; }
+    public String[] getStops() { return stops; }
+    public void setStops(String[] stops) { this.stops = stops; }
     public Instant getCreatedAt() { return createdAt; }
     public List<BookingExtra> getExtras() { return extras; }
 }
