@@ -11,6 +11,24 @@ import java.util.UUID;
 
 @Data
 public class CarResponse {
+
+    @Data
+    public static class ExtraServiceResponse {
+        private UUID id;
+        private String name;
+        private int priceCents;
+        private short displayOrder;
+
+        public static ExtraServiceResponse from(CarExtraService e) {
+            ExtraServiceResponse r = new ExtraServiceResponse();
+            r.id = e.getId();
+            r.name = e.getName();
+            r.priceCents = e.getPriceCents();
+            r.displayOrder = e.getDisplayOrder();
+            return r;
+        }
+    }
+
     private UUID id;
     private String registrationNo;
     private String name;
@@ -32,9 +50,14 @@ public class CarResponse {
     private String supplierName;
     private UUID supplierId;
     private List<CarRateResponse> rates;
+    private List<ExtraServiceResponse> extraServices;
     private Instant createdAt;
 
     public static CarResponse from(Car car, List<CarRate> rates) {
+        return from(car, rates, car.getExtraServices());
+    }
+
+    public static CarResponse from(Car car, List<CarRate> rates, List<CarExtraService> extras) {
         CarResponse r = new CarResponse();
         r.id = car.getId();
         r.registrationNo = car.getRegistrationNo();
@@ -57,6 +80,9 @@ public class CarResponse {
         r.supplierId = car.getSupplier() != null ? car.getSupplier().getId() : null;
         r.supplierName = car.getSupplier() != null ? car.getSupplier().getName() : null;
         r.rates = rates.stream().map(CarRateResponse::from).toList();
+        r.extraServices = extras != null
+                ? extras.stream().map(ExtraServiceResponse::from).toList()
+                : Collections.emptyList();
         r.createdAt = car.getCreatedAt();
         return r;
     }

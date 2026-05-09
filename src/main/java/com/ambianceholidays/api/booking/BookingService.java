@@ -381,6 +381,34 @@ public class BookingService {
         }
     }
 
+    private static final java.time.ZoneId MAURITIUS_TZ = java.time.ZoneId.of("Indian/Mauritius");
+
+    /** Pull a String value from a cart-options map, accepting any of `keys` as aliases. Returns null if missing/blank. */
+    private static String optString(Map<String, Object> opts, String... keys) {
+        for (String k : keys) {
+            Object v = opts.get(k);
+            if (v instanceof String s && !s.isBlank()) return s;
+        }
+        return null;
+    }
+
+    /**
+     * Combine a YYYY-MM-DD date string with an optional HH:MM time string into a
+     * Mauritius-local Instant. Returns null on parse failure or null date.
+     */
+    private static java.time.Instant combineToInstant(String dateStr, String timeStr) {
+        if (dateStr == null) return null;
+        try {
+            java.time.LocalDate d = java.time.LocalDate.parse(dateStr);
+            java.time.LocalTime t = (timeStr != null && !timeStr.isBlank())
+                    ? java.time.LocalTime.parse(timeStr.length() == 5 ? timeStr : timeStr.substring(0, 5))
+                    : java.time.LocalTime.MIDNIGHT;
+            return java.time.ZonedDateTime.of(d, t, MAURITIUS_TZ).toInstant();
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
     private void extractItemOptions(BookingItem item, Map<String, Object> opts) {
         if (opts.get("pickupLocation") instanceof String s)  item.setPickupLocation(s);
         if (opts.get("dropoffLocation") instanceof String s) item.setDropoffLocation(s);
@@ -392,6 +420,32 @@ public class BookingService {
         // Frontend sends rentalDays as a number
         if (opts.get("rentalDays") instanceof Number n) item.setRentalDays(n.shortValue());
         if (opts.get("notes") instanceof String s) item.setNotes(s);
+
+        // Pickup / drop-off datetime — combine the YYYY-MM-DD + HH:MM the user
+        // selected into Instants on BookingItem. Frontend uses different key
+        // names per flow:
+        //   Car rental:   pickupDate / pickupTime / dropoffDate / dropoffTime
+        //   Transfer:     date / time   (single-leg)  +  returnDate / returnTime (round-trip)
+        //   Tour:         (no per-item time — relies on pickupZone.pickupTime)
+        // Read every alias so admin BookingDetails can render the start/end
+        // datetime regardless of which flow the booking came from.
+        java.time.Instant startAt = combineToInstant(
+                optString(opts, "pickupDate", "date", "serviceDate"),
+                optString(opts, "pickupTime", "time"));
+        if (startAt != null) item.setStartAt(startAt);
+
+        java.time.Instant endAt = combineToInstant(
+                optString(opts, "dropoffDate", "returnDate"),
+                optString(opts, "dropoffTime", "returnTime"));
+        if (endAt != null) item.setEndAt(endAt);
+
+        // HOURLY transfers carry a "hours" duration — append to notes so admin
+        // sees it on BookingDetails. (No dedicated column; matches the same
+        // approach used for free-form special requests.)
+        if (opts.get("hours") instanceof Number n && n.intValue() > 0) {
+            String prefix = item.getNotes() != null && !item.getNotes().isBlank() ? item.getNotes() + " | " : "";
+            item.setNotes(prefix + "Duration: " + n.intValue() + " hour" + (n.intValue() == 1 ? "" : "s"));
+        }
         // Multi-trip stops list. Frontend sends `stops: string[]` for MULTI_TRIP transfers.
         if (opts.get("stops") instanceof List<?> stopList) {
             String[] stops = stopList.stream()

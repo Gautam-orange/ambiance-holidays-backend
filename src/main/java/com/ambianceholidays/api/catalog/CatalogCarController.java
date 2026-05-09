@@ -5,9 +5,11 @@ import com.ambianceholidays.api.car.dto.CarResponse;
 import com.ambianceholidays.common.dto.ApiResponse;
 import com.ambianceholidays.domain.car.CarCategory;
 import lombok.RequiredArgsConstructor;
+import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
+import java.time.LocalDate;
 import java.util.Map;
 import java.util.UUID;
 
@@ -23,8 +25,11 @@ public class CatalogCarController {
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "20") int size,
             @RequestParam(required = false) CarCategory category,
-            @RequestParam(required = false) Integer minPax) {
-        return ResponseEntity.ok(ApiResponse.ok(carService.listCatalogCars(page, size, category, minPax)));
+            @RequestParam(required = false) Integer minPax,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate dateFrom,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate dateTo) {
+        return ResponseEntity.ok(ApiResponse.ok(
+                carService.listCatalogCars(page, size, category, minPax, dateFrom, dateTo)));
     }
 
     @GetMapping("/{id}")

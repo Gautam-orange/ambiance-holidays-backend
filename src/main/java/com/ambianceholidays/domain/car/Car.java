@@ -97,6 +97,11 @@ public class Car {
     @Builder.Default
     private List<CarRate> rates = new ArrayList<>();
 
+    @OneToMany(mappedBy = "car", cascade = CascadeType.ALL, orphanRemoval = true, fetch = FetchType.LAZY)
+    @OrderBy("displayOrder ASC")
+    @Builder.Default
+    private List<CarExtraService> extraServices = new ArrayList<>();
+
     @CreatedDate
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;

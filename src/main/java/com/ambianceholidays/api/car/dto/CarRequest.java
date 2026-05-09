@@ -1,6 +1,7 @@
 package com.ambianceholidays.api.car.dto;
 
 import com.ambianceholidays.domain.car.CarCategory;
+import com.ambianceholidays.domain.car.CarStatus;
 import com.ambianceholidays.domain.car.CarUsageType;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.*;
@@ -12,6 +13,16 @@ import java.util.UUID;
 
 @Data
 public class CarRequest {
+
+    @Data
+    public static class ExtraServiceRequest {
+        @NotBlank
+        @Size(max = 100)
+        private String name;
+        @Min(0)
+        private int priceCents;
+    }
+
 
     @NotBlank
     @Size(max = 50)
@@ -49,4 +60,11 @@ public class CarRequest {
 
     @Valid
     private List<CarRateRequest> rates = new ArrayList<>();
+
+    /** Optional add-on services bookable with this car. */
+    @Valid
+    private List<ExtraServiceRequest> extraServices = new ArrayList<>();
+
+    /** Lifecycle state. Null defaults to ACTIVE on create; ignored on update. */
+    private CarStatus status;
 }

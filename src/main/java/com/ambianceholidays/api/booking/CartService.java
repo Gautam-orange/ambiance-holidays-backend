@@ -195,6 +195,16 @@ public class CartService {
      * Accepts both `adults` (rentals/transfers) and `paxAdults` (legacy/tours)
      * keys for forward-compatibility.
      */
+    /** Return amountCents for a car's first rate row of the given period, or 0 if not configured. */
+    private static int rateForPeriod(com.ambianceholidays.domain.car.Car car,
+            com.ambianceholidays.domain.car.RatePeriod period) {
+        return car.getRates().stream()
+                .filter(r -> r.getPeriod() == period)
+                .findFirst()
+                .map(r -> r.getAmountCents())
+                .orElse(0);
+    }
+
     private void validateAdultCount(Map<String, Object> options, short capacity, String carName) {
         if (options == null) return;
         Integer adults = null;
@@ -236,12 +246,28 @@ public class CartService {
                         throw BusinessException.conflict("CAR_UNAVAILABLE",
                                 "Car is not available for the selected dates");
                 }
-                int dailyRate = car.getRates().stream()
-                        .filter(r -> r.getPeriod() == RatePeriod.DAILY)
-                        .findFirst()
-                        .map(r -> r.getAmountCents())
-                        .orElseThrow(() -> BusinessException.badRequest("NO_RATE", "Car has no daily rate configured"));
-                int basePrice = dailyRate * rentalDays;
+                // Auto-pick the best-fitting rental rate period:
+                //   ≥30 days → MONTHLY × ceil(days/30) when set, otherwise WEEKLY/DAILY
+                //   ≥7  days → WEEKLY  × ceil(days/7)  when set, otherwise DAILY
+                //   else        DAILY × days
+                // Falls back to DAILY when the larger window isn't configured.
+                int monthlyRate = rateForPeriod(car, RatePeriod.MONTHLY);
+                int weeklyRate  = rateForPeriod(car, RatePeriod.WEEKLY);
+                int dailyRate   = rateForPeriod(car, RatePeriod.DAILY);
+                if (dailyRate <= 0) {
+                    throw BusinessException.badRequest("NO_RATE",
+                            "Car has no daily rate configured");
+                }
+                int basePrice;
+                if (rentalDays >= 28 && monthlyRate > 0) {
+                    int months = (rentalDays + 29) / 30; // ceil(days/30)
+                    basePrice = monthlyRate * months;
+                } else if (rentalDays >= 7 && weeklyRate > 0) {
+                    int weeks = (rentalDays + 6) / 7;     // ceil(days/7)
+                    basePrice = weeklyRate * weeks;
+                } else {
+                    basePrice = dailyRate * rentalDays;
+                }
                 // Add any selected extra services
                 int extrasTotal = 0;
                 if (options != null && options.get("selectedExtras") instanceof List<?> extList) {

@@ -29,6 +29,7 @@ public class CarService {
     private final CarRepository carRepository;
     private final CarRateRepository carRateRepository;
     private final CarAvailabilityRepository availabilityRepository;
+    private final CarExtraServiceRepository extraServiceRepository;
     private final SupplierRepository supplierRepository;
 
     @Transactional
@@ -59,12 +60,14 @@ public class CarService {
                 .includes(toArray(request.getIncludes()))
                 .excludes(toArray(request.getExcludes()))
                 .supplier(supplier)
+                .status(request.getStatus() != null ? request.getStatus() : CarStatus.ACTIVE)
                 .build();
 
         car = carRepository.save(car);
 
         List<CarRate> rates = saveRates(car, request.getRates());
-        return CarResponse.from(car, rates);
+        List<CarExtraService> extras = saveExtras(car, request.getExtraServices());
+        return CarResponse.from(car, rates, extras);
     }
 
     @Transactional
@@ -98,12 +101,17 @@ public class CarService {
         car.setIncludes(toArray(request.getIncludes()));
         car.setExcludes(toArray(request.getExcludes()));
         car.setSupplier(supplier);
+        if (request.getStatus() != null) car.setStatus(request.getStatus());
 
         car = carRepository.save(car);
 
         carRateRepository.deleteByCarId(car.getId());
         List<CarRate> rates = saveRates(car, request.getRates());
-        return CarResponse.from(car, rates);
+        // Replace extra services in-place (orphanRemoval cascade handles dropped rows)
+        car.getExtraServices().clear();
+        carRepository.save(car);
+        List<CarExtraService> extras = saveExtras(car, request.getExtraServices());
+        return CarResponse.from(car, rates, extras);
     }
 
     @Transactional(readOnly = true)
@@ -140,7 +148,8 @@ public class CarService {
     }
 
     @Transactional(readOnly = true)
-    public Map<String, Object> listCatalogCars(int page, int size, CarCategory category, Integer minPax) {
+    public Map<String, Object> listCatalogCars(int page, int size, CarCategory category, Integer minPax,
+            LocalDate dateFrom, LocalDate dateTo) {
         Specification<Car> spec = (root, query, cb) -> {
             List<Predicate> predicates = new ArrayList<>();
             predicates.add(cb.isNull(root.get("deletedAt")));
@@ -156,18 +165,33 @@ public class CarService {
 
         PageRequest pageable = PageRequest.of(page, size, Sort.by("category").ascending().and(Sort.by("name").ascending()));
         Page<Car> pageResult = carRepository.findAll(spec, pageable);
-        return buildPageResponse(page, size, pageResult);
+
+        // Date-range availability filter — drop cars with a CarAvailability block
+        // overlapping the requested window. Post-filter rather than join so
+        // pagination semantics stay simple; the per-page count is small.
+        List<Car> contentFiltered = pageResult.getContent();
+        if (dateFrom != null) {
+            LocalDate end = dateTo != null && !dateTo.isBefore(dateFrom) ? dateTo : dateFrom;
+            contentFiltered = contentFiltered.stream()
+                    .filter(c -> availabilityRepository.countOverlapping(c.getId(), dateFrom, end) == 0)
+                    .toList();
+        }
+        return buildPageResponse(page, size, contentFiltered, pageResult.getTotalElements());
     }
 
     private Map<String, Object> buildPageResponse(int page, int size, Page<Car> pageResult) {
-        List<UUID> ids = pageResult.getContent().stream().map(Car::getId).toList();
+        return buildPageResponse(page, size, pageResult.getContent(), pageResult.getTotalElements());
+    }
+
+    private Map<String, Object> buildPageResponse(int page, int size, List<Car> content, long total) {
+        List<UUID> ids = content.stream().map(Car::getId).toList();
         Map<UUID, List<CarRate>> ratesByCarId = ids.isEmpty() ? Map.of() :
                 carRateRepository.findByCarIdIn(ids).stream()
                         .collect(Collectors.groupingBy(r -> r.getCar().getId()));
-        List<CarResponse> items = pageResult.getContent().stream()
+        List<CarResponse> items = content.stream()
                 .map(car -> CarResponse.from(car, ratesByCarId.getOrDefault(car.getId(), List.of())))
                 .toList();
-        return Map.of("items", items, "meta", PageMeta.of(page, size, pageResult.getTotalElements()));
+        return Map.of("items", items, "meta", PageMeta.of(page, size, total));
     }
 
     @Transactional
@@ -313,6 +337,28 @@ public class CarService {
             }
         }
 
+        // BOTH usageType: must have at least one rental period rate (Daily/Weekly/Monthly)
+        // AND at least one PER_KM transfer band — otherwise one of the two flows
+        // will fail with NO_RATE / NO_RATE_BAND at booking time.
+        if (request.getUsageType() == CarUsageType.BOTH) {
+            boolean hasRentalRate = rates.stream().anyMatch(r ->
+                    r.getPeriod() == RatePeriod.DAILY
+                    || r.getPeriod() == RatePeriod.WEEKLY
+                    || r.getPeriod() == RatePeriod.MONTHLY);
+            if (!hasRentalRate) {
+                throw BusinessException.badRequest("MISSING_RENTAL_RATE",
+                        "BOTH-usage cars need at least one rental rate (Daily / Weekly / Monthly) on top of the PER_KM transfer bands.");
+            }
+        }
+        // RENTAL-only: must have at least one DAILY rate (the booking flow charges per day)
+        if (request.getUsageType() == CarUsageType.RENTAL) {
+            boolean hasDaily = rates.stream().anyMatch(r -> r.getPeriod() == RatePeriod.DAILY);
+            if (!hasDaily) {
+                throw BusinessException.badRequest("MISSING_DAILY_RATE",
+                        "Rental cars need at least a DAILY rate.");
+            }
+        }
+
         // Transfer-specific overlap + presence rules
         if (isTransferEligible) {
             List<CarRateRequest> perKm = rates == null ? List.of() :
@@ -352,6 +398,27 @@ public class CarService {
                 .kmTo(req.getKmTo())
                 .build()).toList();
         return carRateRepository.saveAll(rates);
+    }
+
+    /**
+     * Persist optional add-on services (Baby Seat, Additional Driver, GPS, etc.)
+     * into the dedicated `car_extra_services` table. Replaces the legacy
+     * `XSVC:Name:PriceCents` encoding inside `cars.includes`.
+     */
+    private List<CarExtraService> saveExtras(Car car, List<CarRequest.ExtraServiceRequest> extras) {
+        if (extras == null || extras.isEmpty()) return List.of();
+        short order = 0;
+        List<CarExtraService> rows = new ArrayList<>();
+        for (CarRequest.ExtraServiceRequest e : extras) {
+            if (e.getName() == null || e.getName().isBlank()) continue;
+            CarExtraService row = new CarExtraService();
+            row.setCar(car);
+            row.setName(e.getName().trim());
+            row.setPriceCents(Math.max(0, e.getPriceCents()));
+            row.setDisplayOrder(order++);
+            rows.add(row);
+        }
+        return extraServiceRepository.saveAll(rows);
     }
 
     private String[] toArray(List<String> list) {
