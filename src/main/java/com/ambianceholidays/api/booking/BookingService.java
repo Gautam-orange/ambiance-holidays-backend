@@ -38,6 +38,7 @@ public class BookingService {
     private final CustomerRepository customerRepo;
     private final AgentRepository agentRepo;
     private final PaymentRepository paymentRepo;
+    private final com.ambianceholidays.domain.payment.InvoiceRepository invoiceRepo;
     private final SystemSettingRepository settingRepo;
     private final PricingEngine pricingEngine;
     private final CartService cartService;
@@ -46,6 +47,7 @@ public class BookingService {
 
     public BookingService(BookingRepository bookingRepo, CustomerRepository customerRepo,
             AgentRepository agentRepo, PaymentRepository paymentRepo,
+            com.ambianceholidays.domain.payment.InvoiceRepository invoiceRepo,
             SystemSettingRepository settingRepo, PricingEngine pricingEngine,
             CartService cartService, NotificationService notificationService,
             com.ambianceholidays.domain.car.CarRepository carRepo) {
@@ -53,6 +55,7 @@ public class BookingService {
         this.customerRepo = customerRepo;
         this.agentRepo = agentRepo;
         this.paymentRepo = paymentRepo;
+        this.invoiceRepo = invoiceRepo;
         this.settingRepo = settingRepo;
         this.pricingEngine = pricingEngine;
         this.cartService = cartService;
@@ -208,7 +211,12 @@ public class BookingService {
         Booking b = bookingRepo.findById(id).orElseThrow(() -> BusinessException.notFound("Booking"));
         checkAccess(b, actor);
         Payment latest = latestPaymentFor(b.getId());
-        return ApiResponse.ok(BookingResponse.from(b, latest));
+        // Look up invoice number for the Booking Detail screen (admin display).
+        // A booking may legitimately have no Invoice yet (DRAFT status); return null then.
+        String invoiceNumber = invoiceRepo.findByBookingId(b.getId()).stream()
+                .map(com.ambianceholidays.domain.payment.Invoice::getInvoiceNumber)
+                .findFirst().orElse(null);
+        return ApiResponse.ok(BookingResponse.from(b, latest, invoiceNumber));
     }
 
     /** Latest (by createdAt desc) Payment for a booking, or null if none. */

@@ -49,6 +49,9 @@ public class CarRequest {
     private Integer luggageCapacity;
     private boolean hasAc = true;
     private boolean automatic = true;
+    /** Gear count (5 / 6 / 8 etc.). Null when unknown. */
+    @Min(1) @Max(12)
+    private Short transmissionGears;
     private String fuelType = "Petrol";
     private String color;
     private String description;

@@ -39,6 +39,7 @@ public class CarResponse {
     private Integer luggageCapacity;
     private boolean hasAc;
     private boolean automatic;
+    private Short transmissionGears;
     private String fuelType;
     private String color;
     private String description;
@@ -69,6 +70,7 @@ public class CarResponse {
         r.luggageCapacity = car.getLuggageCapacity() != null ? car.getLuggageCapacity().intValue() : null;
         r.hasAc = car.isHasAc();
         r.automatic = car.isAutomatic();
+        r.transmissionGears = car.getTransmissionGears();
         r.fuelType = car.getFuelType();
         r.color = car.getColor();
         r.description = car.getDescription();

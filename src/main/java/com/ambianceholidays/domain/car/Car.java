@@ -65,6 +65,10 @@ public class Car {
     @Builder.Default
     private boolean automatic = true;
 
+    /** Gear count for the transmission (e.g. 5 / 6 / 8). Null when unknown. */
+    @Column(name = "transmission_gears")
+    private Short transmissionGears;
+
     @Column(name = "fuel_type", length = 30)
     @Builder.Default
     private String fuelType = "Petrol";

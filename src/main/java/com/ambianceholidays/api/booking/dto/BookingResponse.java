@@ -14,6 +14,7 @@ import java.util.UUID;
 public record BookingResponse(
         UUID id,
         String reference,
+        String invoiceNumber,
         BookingStatus status,
         String customerName,
         String customerEmail,
@@ -24,6 +25,8 @@ public record BookingResponse(
         String agentName,
         UUID agentId,
         String createdByName,
+        /** "AGENT" if booked by a B2B partner, "CUSTOMER" if direct, null otherwise. */
+        String bookedByType,
         boolean isEnquiry,
         String cancelledByType,
         LocalDate serviceDate,
@@ -46,21 +49,39 @@ public record BookingResponse(
 ) {
     /** Backwards-compat factory for callers that don't need payment info. */
     public static BookingResponse from(Booking b) {
-        return from(b, null);
+        return from(b, null, null);
     }
 
     public static BookingResponse from(Booking b, Payment p) {
+        return from(b, p, null);
+    }
+
+    public static BookingResponse from(Booking b, Payment p, String invoiceNumber) {
         var c = b.getCustomer();
         String customerName = c.getFullName();
         String customerPhone = c.getPhone();
         String agentName = b.getAgent() != null ? b.getAgent().getCompanyName() : null;
         UUID agentId = b.getAgent() != null ? b.getAgent().getId() : null;
         String createdByName = b.getCreatedBy() != null ? b.getCreatedBy().getFullName() : null;
+        // bookedByType — distinguishes agent-driven vs direct customer bookings for the
+        // "Book By" column in admin lists.
+        String bookedByType;
+        if (b.getAgent() != null) {
+            bookedByType = "AGENT";
+        } else if (b.getCreatedBy() != null
+                && b.getCreatedBy().getRole() != null
+                && "B2B_AGENT".equals(b.getCreatedBy().getRole().name())) {
+            bookedByType = "AGENT";
+        } else if (b.getCreatedBy() != null) {
+            bookedByType = "CUSTOMER";
+        } else {
+            bookedByType = null;
+        }
         return new BookingResponse(
-                b.getId(), b.getReference(), b.getStatus(),
+                b.getId(), b.getReference(), invoiceNumber, b.getStatus(),
                 customerName, c.getEmail(), customerPhone,
                 c.getWhatsapp(), c.getNationality(), c.getAddress(),
-                agentName, agentId, createdByName,
+                agentName, agentId, createdByName, bookedByType,
                 b.isEnquiry(), b.getCancelledByType(),
                 b.getServiceDate(),
                 b.getSubtotalCents(), b.getMarkupCents(), b.getCommissionCents(),

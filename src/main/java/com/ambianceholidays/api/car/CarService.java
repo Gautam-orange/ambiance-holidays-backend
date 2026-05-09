@@ -52,6 +52,7 @@ public class CarService {
                 .luggageCapacity(request.getLuggageCapacity() != null ? request.getLuggageCapacity().shortValue() : null)
                 .hasAc(request.isHasAc())
                 .automatic(request.isAutomatic())
+                .transmissionGears(request.getTransmissionGears())
                 .fuelType(request.getFuelType() != null ? request.getFuelType() : "Petrol")
                 .color(request.getColor())
                 .description(request.getDescription())
@@ -93,6 +94,7 @@ public class CarService {
         car.setLuggageCapacity(request.getLuggageCapacity() != null ? request.getLuggageCapacity().shortValue() : null);
         car.setHasAc(request.isHasAc());
         car.setAutomatic(request.isAutomatic());
+        car.setTransmissionGears(request.getTransmissionGears());
         car.setFuelType(request.getFuelType() != null ? request.getFuelType() : "Petrol");
         car.setColor(request.getColor());
         car.setDescription(request.getDescription());
