@@ -81,7 +81,22 @@ public class TransferPricingService {
     // ── Helpers ───────────────────────────────────────────────
 
     private void apply(TransferPricingTier t, TransferPricingTierRequest req) {
-        t.setLabel(req.label());
+        // AM_020: server-side guards — frontend already blocks empties, but
+        // back-end must reject too so direct API calls can't slip blanks in.
+        if (req.label() == null || req.label().isBlank()) {
+            throw BusinessException.badRequest("LABEL_REQUIRED", "Label is required.");
+        }
+        if (req.priceCents() <= 0) {
+            throw BusinessException.badRequest("PRICE_INVALID", "Price must be greater than zero.");
+        }
+        if (req.minKm() < 0) {
+            throw BusinessException.badRequest("MIN_KM_INVALID", "Min KM cannot be negative.");
+        }
+        if (req.maxKm() != null && req.maxKm() <= req.minKm()) {
+            throw BusinessException.badRequest("MAX_KM_INVALID",
+                    "Max KM must be greater than Min KM (or blank for unlimited).");
+        }
+        t.setLabel(req.label().trim());
         t.setMinKm(req.minKm());
         t.setMaxKm(req.maxKm());
         t.setPriceCents(req.priceCents());

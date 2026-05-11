@@ -6,6 +6,7 @@ import com.ambianceholidays.api.notification.NotificationService;
 import com.ambianceholidays.common.dto.ApiResponse;
 import com.ambianceholidays.common.dto.PageMeta;
 import com.ambianceholidays.domain.agent.*;
+import com.ambianceholidays.domain.user.RefreshTokenRepository;
 import com.ambianceholidays.domain.user.User;
 import com.ambianceholidays.domain.user.UserRepository;
 import com.ambianceholidays.exception.BusinessException;
@@ -18,6 +19,7 @@ import org.springframework.data.domain.Sort;
 import org.springframework.data.jpa.domain.Specification;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.*;
 
 import java.time.Instant;
@@ -32,12 +34,15 @@ public class AdminAgentController {
     private final AgentRepository agentRepo;
     private final UserRepository userRepo;
     private final NotificationService notificationService;
+    private final RefreshTokenRepository refreshTokenRepository;
 
     public AdminAgentController(AgentRepository agentRepo, UserRepository userRepo,
-            NotificationService notificationService) {
+            NotificationService notificationService,
+            RefreshTokenRepository refreshTokenRepository) {
         this.agentRepo = agentRepo;
         this.userRepo = userRepo;
         this.notificationService = notificationService;
+        this.refreshTokenRepository = refreshTokenRepository;
     }
 
     @GetMapping
@@ -99,20 +104,33 @@ public class AdminAgentController {
 
         Agent saved = agentRepo.save(agent);
         notificationService.sendAgentApproval(saved);
+        notificationService.sendAdminAgentApprovalAction("approved",
+                saved.getCompanyName(), actor.getEmail());
         return ApiResponse.ok(AgentResponse.from(saved));
     }
 
     @PostMapping("/{id}/suspend")
     @PreAuthorize("hasRole('SUPER_ADMIN')")
+    @Transactional
     public ApiResponse<AgentResponse> suspend(@PathVariable UUID id) {
         Agent agent = agentRepo.findById(id)
                 .filter(a -> a.getDeletedAt() == null)
                 .orElseThrow(() -> BusinessException.notFound("Agent"));
 
         agent.setStatus(AgentStatus.SUSPENDED);
-        // Lock out the underlying user so future logins are denied while suspended.
-        if (agent.getUser() != null) agent.getUser().setActive(false);
-        return ApiResponse.ok(AgentResponse.from(agentRepo.save(agent)));
+        // Lock out the underlying user so future logins are denied while suspended,
+        // AND revoke every refresh token so they can't silently mint a new access
+        // token after the current one expires. The JwtAuthenticationFilter
+        // additionally rejects any in-flight requests on the current access
+        // token because user.isActive() is now false.
+        if (agent.getUser() != null) {
+            agent.getUser().setActive(false);
+            refreshTokenRepository.revokeAllForUser(agent.getUser().getId());
+        }
+        Agent saved = agentRepo.save(agent);
+        notificationService.sendAdminAgentApprovalAction("suspended",
+                saved.getCompanyName(), "system");
+        return ApiResponse.ok(AgentResponse.from(saved));
     }
 
     @PostMapping("/{id}/reactivate")
@@ -133,6 +151,7 @@ public class AdminAgentController {
 
     @PostMapping("/{id}/reject")
     @PreAuthorize("hasRole('SUPER_ADMIN')")
+    @Transactional
     public ApiResponse<AgentResponse> reject(@PathVariable UUID id,
             @RequestBody(required = false) java.util.Map<String, String> body) {
         Agent agent = agentRepo.findById(id)
@@ -144,7 +163,10 @@ public class AdminAgentController {
         }
 
         agent.setStatus(AgentStatus.SUSPENDED);
-        if (agent.getUser() != null) agent.getUser().setActive(false);
+        if (agent.getUser() != null) {
+            agent.getUser().setActive(false);
+            refreshTokenRepository.revokeAllForUser(agent.getUser().getId());
+        }
         // We could persist the rejection reason on a dedicated column if needed.
         return ApiResponse.ok(AgentResponse.from(agentRepo.save(agent)));
     }

@@ -49,14 +49,19 @@ public record BookingResponse(
 ) {
     /** Backwards-compat factory for callers that don't need payment info. */
     public static BookingResponse from(Booking b) {
-        return from(b, null, null);
+        return from(b, null, null, null);
     }
 
     public static BookingResponse from(Booking b, Payment p) {
-        return from(b, p, null);
+        return from(b, p, null, null);
     }
 
     public static BookingResponse from(Booking b, Payment p, String invoiceNumber) {
+        return from(b, p, invoiceNumber, null);
+    }
+
+    public static BookingResponse from(Booking b, Payment p, String invoiceNumber,
+            com.ambianceholidays.domain.car.CarRepository carRepo) {
         var c = b.getCustomer();
         String customerName = c.getFullName();
         String customerPhone = c.getPhone();
@@ -89,7 +94,7 @@ public record BookingResponse(
                 b.getVatRate(), b.getMarkupRate(), b.getCommissionRate(),
                 b.getSpecialRequests(), b.getCancelReason(), b.getCancellationFeeCents(),
                 b.getCancelledAt(), b.getCreatedAt(), b.getUpdatedAt(),
-                b.getItems().stream().map(BookingItemResponse::from).toList(),
+                b.getItems().stream().map(i -> BookingItemResponse.from(i, carRepo)).toList(),
                 p != null ? PaymentSummary.from(p) : null
         );
     }

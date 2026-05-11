@@ -237,6 +237,18 @@ public class BookingService {
     public void finalizeBooking(Booking booking, String sessionKey) {
         if (sessionKey != null) cartService.clearCart(sessionKey);
         notificationService.sendBookingConfirmation(booking);
+        // Ops-side notification — every new booking goes out to active admins.
+        // Extract primitives on the caller's thread so the @Async path doesn't
+        // race with this transaction's Hibernate session.
+        notificationService.sendAdminBookingCreated(
+                booking.getReference(),
+                booking.getCustomer().getFullName(),
+                booking.getCustomer().getEmail(),
+                booking.getAgent() != null ? booking.getAgent().getCompanyName() : null,
+                booking.getServiceDate(),
+                booking.getTotalCents(),
+                null, // currency intentionally null — admin email defaults to USD label
+                booking.getId());
     }
 
     // ── List / Get ────────────────────────────────────────────────────────────
@@ -251,7 +263,7 @@ public class BookingService {
         Map<UUID, Payment> latestByBooking = latestPaymentsFor(pg.getContent());
         return ApiResponse.ok(
                 pg.getContent().stream()
-                        .map(b -> BookingResponse.from(b, latestByBooking.get(b.getId())))
+                        .map(b -> BookingResponse.from(b, latestByBooking.get(b.getId()), null, carRepo))
                         .toList(),
                 PageMeta.of(page, size, pg.getTotalElements()));
     }
@@ -266,7 +278,7 @@ public class BookingService {
         String invoiceNumber = invoiceRepo.findByBookingId(b.getId()).stream()
                 .map(com.ambianceholidays.domain.payment.Invoice::getInvoiceNumber)
                 .findFirst().orElse(null);
-        return ApiResponse.ok(BookingResponse.from(b, latest, invoiceNumber));
+        return ApiResponse.ok(BookingResponse.from(b, latest, invoiceNumber, carRepo));
     }
 
     /** Latest (by createdAt desc) Payment for a booking, or null if none. */
@@ -296,6 +308,22 @@ public class BookingService {
     public ApiResponse<BookingResponse> updateStatus(UUID id, BookingStatus newStatus, User actor) {
         Booking b = bookingRepo.findById(id).orElseThrow(() -> BusinessException.notFound("Booking"));
         validateTransition(b.getStatus(), newStatus);
+        // AM_023b: refuse to CONFIRM a booking whose owning user or agent is
+        // suspended/inactive — otherwise an admin can rubber-stamp orders that
+        // the platform already locked the user out of. Cancellation is still
+        // allowed regardless (admin needs a way to close stale orders).
+        if (newStatus == BookingStatus.CONFIRMED) {
+            if (b.getCreatedBy() != null && !b.getCreatedBy().isActive()) {
+                throw BusinessException.badRequest("USER_SUSPENDED",
+                        "Cannot confirm: the customer/agent account is suspended.");
+            }
+            if (b.getAgent() != null
+                    && b.getAgent().getStatus() != com.ambianceholidays.domain.agent.AgentStatus.ACTIVE) {
+                throw BusinessException.badRequest("AGENT_SUSPENDED",
+                        "Cannot confirm: the agent account is "
+                                + b.getAgent().getStatus().name().toLowerCase() + ".");
+            }
+        }
         b.setStatus(newStatus);
         bookingRepo.save(b);
         return ApiResponse.ok(BookingResponse.from(b));
@@ -332,6 +360,13 @@ public class BookingService {
         b.setCancellationFeeCents(fee);
         bookingRepo.save(b);
         notificationService.sendBookingCancellation(b);
+        // Admins-too notification — extract on caller thread to avoid the @Async
+        // / lazy-loading race that bit cancel() in the previous batch.
+        notificationService.sendAdminBookingCancelled(
+                b.getReference(),
+                b.getCustomer().getFullName(),
+                reason,
+                b.getId());
         return ApiResponse.ok(BookingResponse.from(b));
     }
 

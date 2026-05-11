@@ -108,6 +108,15 @@ public class Booking {
     @Column(name = "cancelled_by_type", length = 10)
     private String cancelledByType;
 
+    /** Dedupe flag for the morning-of-service reminder. Set once the email has
+     *  been queued so the scheduler doesn't re-fire every minute. */
+    @Column(name = "reminder_day_sent_at")
+    private Instant reminderDaySentAt;
+
+    /** Dedupe flag for the 15-minutes-before-pickup reminder. */
+    @Column(name = "reminder_imminent_sent_at")
+    private Instant reminderImminentSentAt;
+
     @OneToMany(mappedBy = "booking", cascade = CascadeType.ALL, orphanRemoval = true)
     private List<BookingItem> items = new ArrayList<>();
 
@@ -166,4 +175,8 @@ public class Booking {
     public void setEnquiryDeclinedAt(Instant enquiryDeclinedAt) { this.enquiryDeclinedAt = enquiryDeclinedAt; }
     public String getCancelledByType() { return cancelledByType; }
     public void setCancelledByType(String cancelledByType) { this.cancelledByType = cancelledByType; }
+    public Instant getReminderDaySentAt() { return reminderDaySentAt; }
+    public void setReminderDaySentAt(Instant reminderDaySentAt) { this.reminderDaySentAt = reminderDaySentAt; }
+    public Instant getReminderImminentSentAt() { return reminderImminentSentAt; }
+    public void setReminderImminentSentAt(Instant reminderImminentSentAt) { this.reminderImminentSentAt = reminderImminentSentAt; }
 }

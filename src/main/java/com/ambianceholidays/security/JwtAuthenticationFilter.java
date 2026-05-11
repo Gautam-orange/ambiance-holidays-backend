@@ -1,5 +1,6 @@
 package com.ambianceholidays.security;
 
+import com.ambianceholidays.domain.user.UserRepository;
 import com.ambianceholidays.domain.user.UserRole;
 import io.jsonwebtoken.Claims;
 import jakarta.servlet.FilterChain;
@@ -25,6 +26,7 @@ import java.util.UUID;
 public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
     private final JwtTokenProvider jwtTokenProvider;
+    private final UserRepository userRepo;
 
     @Override
     protected void doFilterInternal(@NonNull HttpServletRequest request,
@@ -56,6 +58,21 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
                 String agentIdStr = claims.get("agentId", String.class);
                 UUID agentId = agentIdStr != null ? UUID.fromString(agentIdStr) : null;
+
+                // Suspend-enforcement: any deactivated user is immediately
+                // locked out, even mid-session. Without this an admin who
+                // suspends an agent must wait for the access token to expire
+                // before the agent stops being able to call the API.
+                boolean stillActive = userRepo.findById(userId)
+                        .map(u -> u.isActive())
+                        .orElse(false);
+                if (!stillActive) {
+                    log.info("Rejecting request: user {} is suspended/inactive", userId);
+                    response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+                    response.setContentType("application/json");
+                    response.getWriter().write("{\"success\":false,\"error\":{\"code\":\"ACCOUNT_SUSPENDED\",\"message\":\"Your account has been suspended. Please contact support.\"}}");
+                    return;
+                }
 
                 SecurityPrincipal principal = new SecurityPrincipal(userId, email, role, agentId);
 

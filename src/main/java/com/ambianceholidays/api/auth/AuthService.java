@@ -43,6 +43,7 @@ public class AuthService {
     private final PasswordEncoder passwordEncoder;
     private final JwtTokenProvider jwtTokenProvider;
     private final JavaMailSender mailSender;
+    private final com.ambianceholidays.api.notification.NotificationService notificationService;
 
     @Value("${app.jwt.refresh-token-expiry-days}")
     private int refreshTokenExpiryDays;
@@ -159,6 +160,10 @@ public class AuthService {
 
         sendVerificationEmail(user);
         sendRegistrationEmail(user, agent);
+        // Notify the ops team so they don't miss the new application.
+        notificationService.sendAdminAgentRegistration(
+                user.getEmail(), user.getFirstName(), user.getLastName(),
+                agent.getCompanyName(), agent.getCountry());
         log.info("New agent registered: {} ({})", user.getEmail(), agent.getCompanyName());
     }
 
