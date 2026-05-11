@@ -44,13 +44,17 @@ public class BookingService {
     private final CartService cartService;
     private final NotificationService notificationService;
     private final com.ambianceholidays.domain.car.CarRepository carRepo;
+    private final com.ambianceholidays.domain.tour.TourRepository tourRepo;
+    private final com.ambianceholidays.domain.tour.DayTripRepository dayTripRepo;
 
     public BookingService(BookingRepository bookingRepo, CustomerRepository customerRepo,
             AgentRepository agentRepo, PaymentRepository paymentRepo,
             com.ambianceholidays.domain.payment.InvoiceRepository invoiceRepo,
             SystemSettingRepository settingRepo, PricingEngine pricingEngine,
             CartService cartService, NotificationService notificationService,
-            com.ambianceholidays.domain.car.CarRepository carRepo) {
+            com.ambianceholidays.domain.car.CarRepository carRepo,
+            com.ambianceholidays.domain.tour.TourRepository tourRepo,
+            com.ambianceholidays.domain.tour.DayTripRepository dayTripRepo) {
         this.bookingRepo = bookingRepo;
         this.customerRepo = customerRepo;
         this.agentRepo = agentRepo;
@@ -61,6 +65,8 @@ public class BookingService {
         this.cartService = cartService;
         this.notificationService = notificationService;
         this.carRepo = carRepo;
+        this.tourRepo = tourRepo;
+        this.dayTripRepo = dayTripRepo;
     }
 
     // ── Checkout ─────────────────────────────────────────────────────────────
@@ -77,6 +83,13 @@ public class BookingService {
      * Used by the payment-required flow (Peach) so we can hold the booking while the user pays.
      */
     public Booking createPendingBooking(String sessionKey, CheckoutRequest req, User actor) {
+        // AM_023: any deactivated user (suspended customer or agent) must be
+        // blocked from creating bookings — defence in depth on top of the
+        // login-time check. Otherwise a token issued before suspension would
+        // still let them check out.
+        if (actor != null && !actor.isActive()) {
+            throw BusinessException.forbidden("Your account is suspended and cannot create bookings");
+        }
         // Fail fast on a suspended / pending agent BEFORE we look at their cart
         // — otherwise the empty-cart message obscures the real reason.
         if (actor != null && actor.getRole().name().equals("B2B_AGENT")) {
@@ -156,6 +169,43 @@ public class BookingService {
                         || car.getStatus() != com.ambianceholidays.domain.car.CarStatus.ACTIVE) {
                     throw BusinessException.badRequest("CAR_UNAVAILABLE",
                             "Vehicle '" + car.getName() + "' is currently unavailable. Please remove it from your cart.");
+                }
+                // AM_041: re-check car seat capacity in case admin shrank it
+                // between add-to-cart and checkout.
+                if (ci.getOptions() != null) {
+                    Object adultsOpt = ci.getOptions().get("adults");
+                    int adultsInCart = adultsOpt instanceof Number n ? n.intValue() : 0;
+                    if (adultsInCart > car.getPassengerCapacity()) {
+                        throw BusinessException.badRequest("PAX_OVER_MAX",
+                                "Vehicle '" + car.getName() + "' seats only "
+                                        + car.getPassengerCapacity()
+                                        + ". Please reduce the passenger count in your cart.");
+                    }
+                }
+            }
+            // AM_041: revalidate tour/day-trip pax against current maxPax —
+            // protects against the admin reducing capacity after add-to-cart.
+            if (ci.getItemType() == com.ambianceholidays.domain.booking.BookingItemType.TOUR
+                    && ci.getOptions() != null) {
+                int adults = ci.getOptions().get("paxAdults") instanceof Number n ? n.intValue() : 1;
+                int children = ci.getOptions().get("paxChildren") instanceof Number n ? n.intValue() : 0;
+                var tour = tourRepo.findById(ci.getRefId()).orElse(null);
+                if (tour != null && (adults + children) > tour.getMaxPax()) {
+                    throw BusinessException.badRequest("PAX_OVER_MAX",
+                            tour.getTitle() + " can host at most " + tour.getMaxPax()
+                                    + " guest" + (tour.getMaxPax() == 1 ? "" : "s") + ". Please update your cart.");
+                }
+            }
+            if (ci.getItemType() == com.ambianceholidays.domain.booking.BookingItemType.DAY_TRIP
+                    && ci.getOptions() != null) {
+                int adults = ci.getOptions().get("paxAdults") instanceof Number n ? n.intValue() : 1;
+                int children = ci.getOptions().get("paxChildren") instanceof Number n ? n.intValue() : 0;
+                var trip = dayTripRepo.findById(ci.getRefId()).orElse(null);
+                if (trip != null && trip.getMaxPax() != null
+                        && (adults + children) > trip.getMaxPax()) {
+                    throw BusinessException.badRequest("PAX_OVER_MAX",
+                            trip.getTitle() + " can host at most " + trip.getMaxPax()
+                                    + " guest" + (trip.getMaxPax() == 1 ? "" : "s") + ". Please update your cart.");
                 }
             }
             BookingItem item = new BookingItem();
