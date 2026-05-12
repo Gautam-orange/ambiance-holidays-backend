@@ -40,12 +40,17 @@ public class BookingController {
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
     public ApiResponse<BookingResponse> checkout(
-            @RequestHeader(value = "X-Cart-Id", required = false) String cartId,
             @AuthenticationPrincipal SecurityPrincipal principal,
             @Valid @RequestBody CheckoutRequest req) {
-        String sessionKey = principal != null ? "user:" + principal.getUserId()
-                : (cartId != null && !cartId.isBlank() ? "guest:" + cartId : "guest:anonymous");
-        var actor = principal != null ? userRepo.findById(principal.getUserId()).orElse(null) : null;
+        // Agent-only platform: checkout requires authentication. We previously
+        // tolerated a guest cart-id header for direct customers; that path is
+        // gone — callers must be logged in.
+        if (principal == null) {
+            throw com.ambianceholidays.exception.BusinessException.unauthorized(
+                    "Please sign in to complete checkout.");
+        }
+        String sessionKey = "user:" + principal.getUserId();
+        var actor = userRepo.findById(principal.getUserId()).orElse(null);
         return bookingService.checkout(sessionKey, req, actor);
     }
 

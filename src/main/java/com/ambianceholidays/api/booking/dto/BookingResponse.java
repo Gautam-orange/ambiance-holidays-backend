@@ -68,20 +68,13 @@ public record BookingResponse(
         String agentName = b.getAgent() != null ? b.getAgent().getCompanyName() : null;
         UUID agentId = b.getAgent() != null ? b.getAgent().getId() : null;
         String createdByName = b.getCreatedBy() != null ? b.getCreatedBy().getFullName() : null;
-        // bookedByType — distinguishes agent-driven vs direct customer bookings for the
-        // "Book By" column in admin lists.
-        String bookedByType;
-        if (b.getAgent() != null) {
-            bookedByType = "AGENT";
-        } else if (b.getCreatedBy() != null
-                && b.getCreatedBy().getRole() != null
-                && "B2B_AGENT".equals(b.getCreatedBy().getRole().name())) {
-            bookedByType = "AGENT";
-        } else if (b.getCreatedBy() != null) {
-            bookedByType = "CUSTOMER";
-        } else {
-            bookedByType = null;
-        }
+        // bookedByType — agent-only platform. Every booking is created by an
+        // agent (or an admin acting on behalf of an agent). The "CUSTOMER"
+        // branch existed back when a direct-customer flow was on the roadmap;
+        // that flow was dropped, so we now always report "AGENT" when there
+        // is any creator at all. Kept as a field for backwards-compat with
+        // existing admin list UIs.
+        String bookedByType = b.getCreatedBy() != null ? "AGENT" : null;
         return new BookingResponse(
                 b.getId(), b.getReference(), invoiceNumber, b.getStatus(),
                 customerName, c.getEmail(), customerPhone,

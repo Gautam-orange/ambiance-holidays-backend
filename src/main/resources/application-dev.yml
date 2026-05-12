@@ -8,3 +8,12 @@ logging:
     org.springframework.security: DEBUG
     org.hibernate.SQL: DEBUG
     org.flywaydb: INFO
+
+# Local dev overrides — Peach redirects come back to localhost:3000 instead of
+# the prod ciadmin.in URL. Override per-env via PEACH_BACKEND_BASE_URL /
+# PEACH_RETURN_BASE_URL when deploying.
+app:
+  base-url: ${APP_BASE_URL:http://localhost:3000}
+  peach:
+    backend-base-url: ${PEACH_BACKEND_BASE_URL:http://localhost:8081/api/v1}
+    return-base-url:  ${PEACH_RETURN_BASE_URL:http://localhost:3000}

@@ -26,10 +26,20 @@ public class PricingEngine {
         return new PricingResult(subtotalCents, markupCents, commissionCents, subtotalCents, vatCents, totalCents);
     }
 
+    /**
+     * Cancellation fee per the published policy:
+     *   >48h before service       → 0%   (free cancellation)
+     *   24h–48h before service    → 50%
+     *   12h–24h before service    → 75%
+     *   ≤12h before service       → 100% (no refund)
+     *
+     * Refunds are processed manually by ops based on this fee — we just record
+     * it on the booking so admin sees how much should be refunded.
+     */
     public int cancellationFee(int totalCents, long hoursUntilService) {
-        if (hoursUntilService > 24) return 0;
-        if (hoursUntilService > 12) return percent(totalCents, new BigDecimal("50"));
-        if (hoursUntilService > 2)  return percent(totalCents, new BigDecimal("75"));
+        if (hoursUntilService > 48) return 0;
+        if (hoursUntilService > 24) return percent(totalCents, new BigDecimal("50"));
+        if (hoursUntilService > 12) return percent(totalCents, new BigDecimal("75"));
         return totalCents;
     }
 

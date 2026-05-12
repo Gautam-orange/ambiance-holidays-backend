@@ -72,14 +72,15 @@ public class PeachPaymentController {
     @ResponseStatus(HttpStatus.CREATED)
     @Transactional
     public ApiResponse<InitiateResponse> initiate(
-            @RequestHeader(value = "X-Cart-Id", required = false) String cartId,
             @AuthenticationPrincipal SecurityPrincipal principal,
             @RequestParam(required = false) String currency,
             @Valid @RequestBody CheckoutRequest req) {
-
-        String sessionKey = principal != null ? "user:" + principal.getUserId()
-                : (cartId != null && !cartId.isBlank() ? "guest:" + cartId : "guest:anonymous");
-        var actor = principal != null ? userRepo.findById(principal.getUserId()).orElse(null) : null;
+        // Agent-only platform: payment initiation requires authentication.
+        if (principal == null) {
+            throw BusinessException.unauthorized("Please sign in to start payment.");
+        }
+        String sessionKey = "user:" + principal.getUserId();
+        var actor = userRepo.findById(principal.getUserId()).orElse(null);
 
         Booking booking = bookingService.createPendingBooking(sessionKey, req, actor);
         String resolvedCurrency = (currency != null && !currency.isBlank())
@@ -97,8 +98,10 @@ public class PeachPaymentController {
     @Transactional
     public ApiResponse<InitiateResponse> retry(@PathVariable UUID bookingId,
                                                @AuthenticationPrincipal SecurityPrincipal principal,
-                                               @RequestHeader(value = "X-Cart-Id", required = false) String cartId,
                                                @RequestParam(required = false) String currency) {
+        if (principal == null) {
+            throw BusinessException.unauthorized("Please sign in to retry payment.");
+        }
         Booking booking = bookingRepo.findById(bookingId)
                 .orElseThrow(() -> BusinessException.notFound("Booking"));
 
@@ -115,8 +118,7 @@ public class PeachPaymentController {
                     "An existing pending or successful payment exists for this booking");
         }
 
-        String sessionKey = principal != null ? "user:" + principal.getUserId()
-                : (cartId != null && !cartId.isBlank() ? "guest:" + cartId : "guest:anonymous");
+        String sessionKey = "user:" + principal.getUserId();
         String resolvedCurrency = (currency != null && !currency.isBlank())
                 ? currency.toUpperCase() : props.getDefaultCurrency();
 

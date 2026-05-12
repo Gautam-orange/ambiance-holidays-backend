@@ -52,3 +52,8 @@ failsafe-reports/
 
 # Maven wrapper (keep mvnw scripts if present, ignore the cached jar)
 .mvn/wrapper/maven-wrapper.jar
+
+# Local dev upload storage (not for source control)
+uploads-local/
+logs/dev-run.log
+logs/*.log

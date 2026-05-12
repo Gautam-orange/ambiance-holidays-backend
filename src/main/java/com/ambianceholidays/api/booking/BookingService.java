@@ -233,9 +233,26 @@ public class BookingService {
         return bookingRepo.save(booking);
     }
 
-    /** Clear the cart and send the booking confirmation email. Call after payment success. */
+    /** Clear the cart and send the booking confirmation email. Call after payment success.
+     *  <p>
+     *  ROOT CAUSE FIX (recurring "cart not cleared after booking" bug):
+     *  the caller used to be the sole source of `sessionKey`. The Peach flow
+     *  stored that key in Redis with a 2-hour TTL — so anyone who took longer
+     *  to complete payment, lost the Redis pod, or hit the non-Peach path
+     *  with a null sessionKey ended up here with `sessionKey == null` and
+     *  the cart was never cleared. We now ALSO derive the key from the
+     *  booking's `createdBy` user, so cart clearing is deterministic. The
+     *  explicit param is still honoured for the guest-cart-id path.
+     */
     public void finalizeBooking(Booking booking, String sessionKey) {
         if (sessionKey != null) cartService.clearCart(sessionKey);
+        // Belt-and-braces: also clear by the user-derived key. If the booking
+        // was created by a logged-in actor, the cart lives at "user:{uuid}"
+        // regardless of what the original payment-initiate flow remembered.
+        if (booking.getCreatedBy() != null) {
+            String userKey = "user:" + booking.getCreatedBy().getId();
+            if (!userKey.equals(sessionKey)) cartService.clearCart(userKey);
+        }
         notificationService.sendBookingConfirmation(booking);
         // Ops-side notification — every new booking goes out to active admins.
         // Extract primitives on the caller's thread so the @Async path doesn't
@@ -308,20 +325,18 @@ public class BookingService {
     public ApiResponse<BookingResponse> updateStatus(UUID id, BookingStatus newStatus, User actor) {
         Booking b = bookingRepo.findById(id).orElseThrow(() -> BusinessException.notFound("Booking"));
         validateTransition(b.getStatus(), newStatus);
-        // AM_023b: refuse to CONFIRM a booking whose owning user or agent is
-        // suspended/inactive — otherwise an admin can rubber-stamp orders that
-        // the platform already locked the user out of. Cancellation is still
+        // Refuse to CONFIRM a booking whose owning agent is suspended /
+        // inactive — otherwise an admin can rubber-stamp orders that the
+        // platform already locked the agent out of. Cancellation is still
         // allowed regardless (admin needs a way to close stale orders).
+        // Agent-only platform — one error code is enough.
         if (newStatus == BookingStatus.CONFIRMED) {
-            if (b.getCreatedBy() != null && !b.getCreatedBy().isActive()) {
-                throw BusinessException.badRequest("USER_SUSPENDED",
-                        "Cannot confirm: the customer/agent account is suspended.");
-            }
-            if (b.getAgent() != null
-                    && b.getAgent().getStatus() != com.ambianceholidays.domain.agent.AgentStatus.ACTIVE) {
+            boolean userInactive = b.getCreatedBy() != null && !b.getCreatedBy().isActive();
+            boolean agentInactive = b.getAgent() != null
+                    && b.getAgent().getStatus() != com.ambianceholidays.domain.agent.AgentStatus.ACTIVE;
+            if (userInactive || agentInactive) {
                 throw BusinessException.badRequest("AGENT_SUSPENDED",
-                        "Cannot confirm: the agent account is "
-                                + b.getAgent().getStatus().name().toLowerCase() + ".");
+                        "Cannot confirm: the agent account is suspended.");
             }
         }
         b.setStatus(newStatus);
